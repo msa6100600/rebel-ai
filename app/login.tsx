@@ -15,7 +15,7 @@ export default function LoginScreen() {
   const { isAuthenticated, loading } = useAuth();
   const { isOwnerSession } = useOwnerSession();
   const [opening, setOpening] = useState(false);
-  const [ownerUsername, setOwnerUsername] = useState("");
+  const [ownerUsername, setOwnerUsername] = useState("rebal ai owner");
   const [ownerPassword, setOwnerPassword] = useState("");
   const [ownerError, setOwnerError] = useState("");
   const ownerLogin = trpc.owner.login.useMutation();
@@ -38,7 +38,7 @@ export default function LoginScreen() {
     if (!ownerUsername.trim() || !ownerPassword || ownerLogin.isPending) return;
     setOwnerError("");
     try {
-      const result = await ownerLogin.mutateAsync({ username: ownerUsername, password: ownerPassword });
+      const result = await ownerLogin.mutateAsync({ username: ownerUsername.trim().replace(/\s+/g, " "), password: ownerPassword.trim() });
       setOwnerPassword("");
       if (!result.granted) {
         setOwnerError("بيانات حساب المالك غير صحيحة.");
@@ -57,8 +57,8 @@ export default function LoginScreen() {
   return (
     <ScreenContainer edges={["top", "bottom", "left", "right"]} className="px-6" containerClassName="bg-background" safeAreaClassName="bg-background">
       <View style={styles.page}>
-        <View style={styles.mark}><IconSymbol name="brain.head.profile" size={54} color="#44D7FF" /></View>
-        <Text style={styles.eyebrow}>YOUR ANALYTICAL COMPANION</Text>
+        <View style={styles.mark}><IconSymbol name="brain.head.profile" size={42} color="#2563EB" /></View>
+        <Text style={styles.eyebrow}>YOUR THINKING PARTNER</Text>
         <Text style={styles.title}>Rebel AI</Text>
         <Text style={styles.subtitle}>أنشئ حساباً أو سجّل الدخول لبدء استخدام المحادثة والتحليل والميزات الصوتية.</Text>
         <View style={styles.featureList}>
@@ -83,22 +83,22 @@ export default function LoginScreen() {
 }
 
 function Feature({ icon, label }: { icon: Parameters<typeof IconSymbol>[0]["name"]; label: string }) {
-  return <View style={styles.feature}><IconSymbol name={icon} size={20} color="#8E7BFF" /><Text style={styles.featureText}>{label}</Text></View>;
+  return <View style={styles.feature}><IconSymbol name={icon} size={19} color="#2563EB" /><Text style={styles.featureText}>{label}</Text></View>;
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, maxWidth: 440, alignSelf: "center" },
-  mark: { width: 98, height: 98, borderRadius: 30, backgroundColor: "#152445", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#36548B", marginBottom: 8 },
-  eyebrow: { color: "#44D7FF", fontWeight: "900", fontSize: 11, letterSpacing: 1.6, textAlign: "center" },
-  title: { color: "#F5F7FF", fontSize: 36, fontWeight: "900", letterSpacing: -0.8 },
-  subtitle: { color: "#B6C1E0", fontSize: 15, lineHeight: 24, textAlign: "center", maxWidth: 330, marginBottom: 8 },
-  featureList: { width: "100%", backgroundColor: "#121A31", borderColor: "#293A60", borderWidth: 1, borderRadius: 18, padding: 15, gap: 13 },
+  page: { flex: 1, alignItems: "center", justifyContent: "center", gap: 13, maxWidth: 440, alignSelf: "center" },
+  mark: { width: 74, height: 74, borderRadius: 25, backgroundColor: "#EAF1FF", alignItems: "center", justifyContent: "center", marginBottom: 5 },
+  eyebrow: { color: "#73737D", fontWeight: "800", fontSize: 10, letterSpacing: 1.5, textAlign: "center" },
+  title: { color: "#1F1F23", fontSize: 34, fontWeight: "800", letterSpacing: -0.8 },
+  subtitle: { color: "#707079", fontSize: 15, lineHeight: 23, textAlign: "center", maxWidth: 330, marginBottom: 7 },
+  featureList: { width: "100%", backgroundColor: "#FFFFFF", borderColor: "#E5E5EA", borderWidth: 1, borderRadius: 18, padding: 15, gap: 13 },
   feature: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
-  featureText: { color: "#D8DFF3", fontSize: 13, flex: 1, textAlign: "right" },
-  loginButton: { width: "100%", minHeight: 54, borderRadius: 15, backgroundColor: "#7158EF", alignItems: "center", justifyContent: "center", flexDirection: "row-reverse", gap: 9, marginTop: 8 },
+  featureText: { color: "#4D4D56", fontSize: 13, flex: 1, textAlign: "right" },
+  loginButton: { width: "100%", minHeight: 54, borderRadius: 15, backgroundColor: "#2563EB", alignItems: "center", justifyContent: "center", flexDirection: "row-reverse", gap: 9, marginTop: 8 },
   loginText: { color: "#FFFFFF", fontSize: 15, fontWeight: "900" },
-  ownerDivider: { flexDirection: "row-reverse", alignItems: "center", gap: 10, width: "100%", marginTop: 2 }, line: { height: 1, flex: 1, backgroundColor: "#2E3D63" }, dividerText: { color: "#8E9ABD", fontSize: 11, fontWeight: "800" },
-  ownerBox: { width: "100%", backgroundColor: "#18233D", borderWidth: 1, borderColor: "#354A7A", borderRadius: 16, padding: 12, gap: 9 }, ownerInput: { minHeight: 43, borderRadius: 10, borderWidth: 1, borderColor: "#354A7A", color: "#F5F7FF", backgroundColor: "#10182C", textAlign: "right", paddingHorizontal: 11, fontSize: 13 }, ownerLoginButton: { minHeight: 43, borderRadius: 10, backgroundColor: "#354F8E", alignItems: "center", justifyContent: "center" }, ownerLoginText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" }, ownerError: { color: "#FFABB8", fontSize: 11, textAlign: "right" },
-  footnote: { color: "#7D8AAF", fontSize: 11, lineHeight: 18, textAlign: "center", maxWidth: 320 },
+  ownerDivider: { flexDirection: "row-reverse", alignItems: "center", gap: 10, width: "100%", marginTop: 2 }, line: { height: 1, flex: 1, backgroundColor: "#E2E2E6" }, dividerText: { color: "#87878F", fontSize: 11, fontWeight: "800" },
+  ownerBox: { width: "100%", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E5EA", borderRadius: 16, padding: 12, gap: 9 }, ownerInput: { minHeight: 43, borderRadius: 10, borderWidth: 1, borderColor: "#DEDEE3", color: "#25252B", backgroundColor: "#FFFFFF", textAlign: "right", paddingHorizontal: 11, fontSize: 13 }, ownerLoginButton: { minHeight: 43, borderRadius: 10, backgroundColor: "#EEF4FF", alignItems: "center", justifyContent: "center" }, ownerLoginText: { color: "#2563EB", fontSize: 13, fontWeight: "900" }, ownerError: { color: "#C7374F", fontSize: 11, textAlign: "right" },
+  footnote: { color: "#8B8B94", fontSize: 11, lineHeight: 18, textAlign: "center", maxWidth: 320 },
   disabled: { opacity: 0.6 }, pressed: { opacity: 0.78, transform: [{ scale: 0.98 }] },
 });

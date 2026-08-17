@@ -105,7 +105,8 @@ export const appRouter = router({
       .input(z.object({ username: z.string().trim().min(1).max(64), password: z.string().min(1).max(256) }))
       .mutation(({ input }) => {
         const expected = process.env.OWNER_CONSOLE_PASSWORD;
-        const validUsername = input.username.toLocaleLowerCase() === OWNER_USERNAME;
+        const normalizedUsername = input.username.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+        const validUsername = normalizedUsername === OWNER_USERNAME;
         if (!expected || !validUsername || input.password !== expected) return { granted: false as const };
         return { granted: true as const, username: OWNER_USERNAME };
       }),
