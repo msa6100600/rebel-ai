@@ -91,6 +91,7 @@ export default function RootLayout() {
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="login" />
               <Stack.Screen name="providers" />
+              <Stack.Screen name="call" />
               <Stack.Screen name="oauth/callback" />
             </Stack>
             <StatusBar style="light" />

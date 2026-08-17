@@ -1,4 +1,5 @@
-import { useState } from "react";
+import * as Speech from "expo-speech";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import { Alert, FlatList, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 
@@ -12,35 +13,65 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { preferences, updatePreferences, clearMemories, clearMessages, ownerRequests, addOwnerRequest } = useRebelStore();
   const [ownerRequest, setOwnerRequest] = useState("");
+  const [checkingVoices, setCheckingVoices] = useState(true);
+  const [availableLanguages, setAvailableLanguages] = useState<string[]>([]);
   const selected = voiceProfiles.find((voice) => voice.id === preferences.selectedVoiceId) ?? voiceProfiles[0];
 
+  useEffect(() => {
+    Speech.getAvailableVoicesAsync()
+      .then((voices) => setAvailableLanguages(voices.map((voice) => voice.language.toLowerCase())))
+      .catch(() => setAvailableLanguages([]))
+      .finally(() => setCheckingVoices(false));
+  }, []);
+
+  const availableVoiceIds = useMemo(() => new Set(voiceProfiles.filter((voice) => {
+    const baseLanguage = voice.language.split("-")[0].toLowerCase();
+    return availableLanguages.some((language) => language === voice.language.toLowerCase() || language.startsWith(`${baseLanguage}-`));
+  }).map((voice) => voice.id)), [availableLanguages]);
+  const selectedAvailable = availableVoiceIds.has(selected.id);
+
   const selectVoice = (voice: VoiceProfile) => {
+    if (!availableVoiceIds.has(voice.id)) {
+      Alert.alert("الصوت غير متاح", "هذا الملف يحتاج صوتاً أو حزمة لغة متوافقة في جهازك. ثبّت اللغة من إعدادات Android أو اختر صوتاً متاحاً.");
+      return;
+    }
     updatePreferences({ selectedVoiceId: voice.id, preferredLanguage: voice.language });
     haptic.light();
   };
+
+  const previewVoice = async () => {
+    if (!selectedAvailable) {
+      Alert.alert("الصوت غير متاح", "ثبّت حزمة اللغة من إعدادات Android أو اختر صوتاً متاحاً.");
+      return;
+    }
+    const voices = await Speech.getAvailableVoicesAsync().catch(() => []);
+    const nativeVoice = voices.find((voice) => voice.language.toLowerCase() === selected.language.toLowerCase()) ?? voices.find((voice) => voice.language.toLowerCase().startsWith(selected.language.split("-")[0].toLowerCase()));
+    Speech.stop();
+    Speech.speak(`مرحباً، أنا ${selected.name}. هذا اختبار للصوت المختار في Rebal Live.`, { language: selected.language, voice: nativeVoice?.identifier, rate: selected.rate, pitch: selected.pitch });
+  };
+
   const submitOwnerRequest = () => {
     if (!ownerRequest.trim()) return;
     addOwnerRequest(ownerRequest.trim());
     setOwnerRequest("");
     haptic.success();
   };
-  const confirmClear = (kind: "memory" | "messages") => Alert.alert(
-    kind === "memory" ? "حذف الذاكرة؟" : "حذف سجل المحادثة؟",
-    kind === "memory" ? "سيتم حذف عناصر الذاكرة المخزنة على هذا الجهاز فقط." : "سيتم حذف كل الرسائل المخزنة على هذا الجهاز فقط.",
-    [{ text: "إلغاء", style: "cancel" }, { text: "حذف", style: "destructive", onPress: () => { if (kind === "memory") clearMemories(); else clearMessages(); haptic.medium(); } }],
-  );
+  const confirmClear = (kind: "memory" | "messages") => Alert.alert(kind === "memory" ? "حذف الذاكرة؟" : "حذف سجل المحادثة؟", kind === "memory" ? "سيتم حذف عناصر الذاكرة المخزنة على هذا الجهاز فقط." : "سيتم حذف كل الرسائل المخزنة على هذا الجهاز فقط.", [{ text: "إلغاء", style: "cancel" }, { text: "حذف", style: "destructive", onPress: () => { if (kind === "memory") clearMemories(); else clearMessages(); haptic.medium(); } }]);
   const renderVoice = ({ item }: { item: VoiceProfile }) => {
     const active = selected.id === item.id;
-    return <Pressable accessibilityRole="radio" accessibilityState={{ selected: active }} onPress={() => selectVoice(item)} style={({ pressed }) => [styles.voiceCard, active && styles.voiceCardActive, pressed && styles.pressed]}><View style={styles.voiceLeft}>{active ? <IconSymbol name="checkmark.seal.fill" color="#8E7BFF" size={21} /> : <View style={styles.radio} />}</View><View style={styles.voiceText}><Text style={styles.voiceName}>{item.name}</Text><Text style={styles.voiceMeta}>{item.gender} · {item.dialect}</Text></View></Pressable>;
+    const available = availableVoiceIds.has(item.id);
+    const status = checkingVoices ? "جارٍ فحص الجهاز" : available ? "متاح على جهازك" : "يتطلب صوت اللغة في الجهاز";
+    return <Pressable accessibilityRole="radio" accessibilityState={{ selected: active, disabled: !checkingVoices && !available }} disabled={!checkingVoices && !available} onPress={() => selectVoice(item)} style={({ pressed }) => [styles.voiceCard, active && styles.voiceCardActive, !checkingVoices && !available && styles.voiceCardUnavailable, pressed && styles.pressed]}><View style={styles.voiceLeft}>{active ? <IconSymbol name="checkmark.seal.fill" color="#8E7BFF" size={21} /> : <View style={styles.radio} />}</View><View style={styles.voiceText}><Text style={styles.voiceName}>{item.name}</Text><Text style={styles.voiceMeta}>{item.gender} · {item.dialect}</Text><Text style={[styles.voiceStatus, available ? styles.available : styles.unavailable]}>{status}</Text></View></Pressable>;
   };
 
   return <ScreenContainer className="px-4" containerClassName="bg-background" safeAreaClassName="bg-background"><View style={styles.page}>
-    <ScreenHeading eyebrow="CONTROL & PRIVACY" title="الإعدادات" action={<StatusPill tone="primary" label={selected.name} />} />
+    <ScreenHeading eyebrow="CONTROL & PRIVACY" title="الإعدادات" action={<StatusPill tone={selectedAvailable ? "success" : "warning"} label={checkingVoices ? "فحص الصوت" : `${availableVoiceIds.size}/10 متاح`} />} />
     <View style={styles.privacy}><IconSymbol name="checkmark.seal.fill" size={21} color="#44D7FF" /><Text style={styles.privacyText}>تُحفظ المحادثات والذاكرة محلياً على جهازك في هذه النسخة. يمكنك حذفها في أي وقت.</Text></View>
     <Pressable accessibilityRole="button" onPress={() => router.push("/providers" as never)} style={({ pressed }) => [styles.providerLink, pressed && styles.pressed]}><IconSymbol name="sparkles" size={21} color="#6DE5FF" /><View style={styles.providerText}><Text style={styles.providerTitle}>خدمات الذكاء الاصطناعي</Text><Text style={styles.providerDetail}>اختر نموذج Rebel Core أو راجع الموفّرات المتاحة للربط.</Text></View><IconSymbol name="chevron.right" size={20} color="#AEBBE0" /></Pressable>
-    <SectionTitle title="الصوت واللهجة" detail="10 اختيارات" />
+    <SectionTitle title="الصوت واللهجة" detail="10 ملفات صوتية" />
     <FlatList data={voiceProfiles} renderItem={renderVoice} keyExtractor={(item) => item.id} numColumns={2} columnWrapperStyle={styles.voiceRow} contentContainerStyle={styles.voiceList} scrollEnabled={false} />
-    <Text style={styles.deviceNote}>يتحقق التطبيق من الصوت المتاح في جهازك ويستخدم أقرب صوت متوافق مع اللغة المختارة عند القراءة.</Text>
+    <Pressable accessibilityRole="button" onPress={previewVoice} disabled={checkingVoices || !selectedAvailable} style={({ pressed }) => [styles.previewButton, (checkingVoices || !selectedAvailable) && styles.disabled, pressed && styles.pressed]}><IconSymbol name="speaker.wave.2.fill" size={18} color="#FFFFFF" /><Text style={styles.previewText}>معاينة الصوت المختار</Text></Pressable>
+    <Text style={styles.deviceNote}>لا يمكن ضمان توفر كل أصوات اللغات العشرة في كل هاتف؛ التطبيق يعرض فوراً ما يدعمه جهازك ويمنع اختيار غير المتاح. يمكن تثبيت لغات أو أصوات إضافية من إعدادات النص إلى كلام في Android.</Text>
     <SectionTitle title="سلوك المساعد" />
     <View style={styles.settingCard}><SettingToggle value={preferences.allowSuggestedLearning} onChange={(value) => { updatePreferences({ allowSuggestedLearning: value }); haptic.medium(); }} title="اقتراح تعلّم جديد" detail="اعرض اقتراحات الحفظ للموافقة فقط." /><View style={styles.divider} /><SettingToggle value={preferences.hapticsEnabled} onChange={(value) => updatePreferences({ hapticsEnabled: value })} title="استجابة لمسية" detail="تنبيه لطيف عند الإجراءات المهمة في الهاتف." /></View>
     <SectionTitle title="وضع المالك" detail="إدارة محلية" />
@@ -55,5 +86,5 @@ function SettingToggle({ value, onChange, title, detail }: { value: boolean; onC
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, paddingTop: 10, paddingBottom: 28 }, privacy: { flexDirection: "row-reverse", gap: 9, backgroundColor: "#192742", borderWidth: 1, borderColor: "#38517C", borderRadius: 16, padding: 13, marginBottom: 14 }, privacyText: { color: "#C9D5F2", fontSize: 12, lineHeight: 19, textAlign: "right", flex: 1 }, providerLink: { flexDirection: "row-reverse", alignItems: "center", gap: 10, backgroundColor: "#172B43", borderColor: "#385E87", borderWidth: 1, borderRadius: 16, padding: 13, marginBottom: 20 }, providerText: { flex: 1, alignItems: "flex-end", gap: 3 }, providerTitle: { color: "#F5F7FF", fontSize: 14, fontWeight: "900", textAlign: "right" }, providerDetail: { color: "#ADC1E6", fontSize: 11, textAlign: "right" }, voiceList: { gap: 9, marginBottom: 9 }, voiceRow: { gap: 9 }, voiceCard: { flex: 1, minHeight: 82, backgroundColor: "#121A31", borderColor: "#2B3B62", borderWidth: 1, borderRadius: 15, padding: 12, flexDirection: "row", alignItems: "center", gap: 8 }, voiceCardActive: { borderColor: "#8E7BFF", backgroundColor: "#1E1A42" }, voiceLeft: { width: 22, alignItems: "center" }, radio: { width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: "#657299" }, voiceText: { flex: 1, alignItems: "flex-end", gap: 4 }, voiceName: { color: "#F5F7FF", fontWeight: "900", fontSize: 15, textAlign: "right" }, voiceMeta: { color: "#9EACD0", fontWeight: "600", fontSize: 10, textAlign: "right" }, deviceNote: { color: "#7785AA", fontSize: 11, lineHeight: 17, textAlign: "right", marginBottom: 20 }, settingCard: { backgroundColor: "#121A31", borderColor: "#2B3B62", borderWidth: 1, borderRadius: 16, padding: 14, marginBottom: 20 }, settingLine: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 12 }, settingText: { alignItems: "flex-end", flex: 1, gap: 3 }, settingTitle: { color: "#F5F7FF", fontSize: 14, fontWeight: "900", textAlign: "right" }, settingDetail: { color: "#99A6CC", fontSize: 11, textAlign: "right" }, divider: { height: 1, backgroundColor: "#2A395E", marginVertical: 13 }, ownerCard: { backgroundColor: "#182642", borderColor: "#3B5184", borderWidth: 1, borderRadius: 16, padding: 14, gap: 10, marginBottom: 20 }, ownerHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, ownerTitle: { color: "#F5F7FF", fontSize: 14, fontWeight: "900", textAlign: "right" }, ownerDetail: { color: "#C2CDEA", fontSize: 12, lineHeight: 19, textAlign: "right" }, ownerInput: { color: "#F5F7FF", backgroundColor: "#111A30", borderWidth: 1, borderColor: "#344A7A", borderRadius: 11, minHeight: 56, padding: 10, fontSize: 12, lineHeight: 18, textAlign: "right" }, ownerButton: { borderRadius: 11, paddingVertical: 11, backgroundColor: "#6950E8", alignItems: "center" }, ownerButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" }, ownerRecent: { color: "#92A4CF", fontSize: 11, lineHeight: 17, textAlign: "right" }, dangerCard: { backgroundColor: "#321E2A", borderColor: "#704153", borderWidth: 1, borderRadius: 16, padding: 14, gap: 12 }, dangerText: { color: "#F0C7D0", fontSize: 12, lineHeight: 18, textAlign: "right" }, dangerActions: { flexDirection: "row-reverse", gap: 9 }, dangerButton: { flex: 1, borderRadius: 11, paddingVertical: 11, backgroundColor: "#4A2937", alignItems: "center" }, dangerButtonText: { color: "#FFDCE4", fontSize: 12, fontWeight: "900" }, disabled: { opacity: 0.45 }, pressed: { opacity: 0.72, transform: [{ scale: 0.98 }] }
+  page: { flex: 1, paddingTop: 10, paddingBottom: 28 }, privacy: { flexDirection: "row-reverse", gap: 9, backgroundColor: "#192742", borderWidth: 1, borderColor: "#38517C", borderRadius: 16, padding: 13, marginBottom: 14 }, privacyText: { color: "#C9D5F2", fontSize: 12, lineHeight: 19, textAlign: "right", flex: 1 }, providerLink: { flexDirection: "row-reverse", alignItems: "center", gap: 10, backgroundColor: "#172B43", borderColor: "#385E87", borderWidth: 1, borderRadius: 16, padding: 13, marginBottom: 20 }, providerText: { flex: 1, alignItems: "flex-end", gap: 3 }, providerTitle: { color: "#F5F7FF", fontSize: 14, fontWeight: "900", textAlign: "right" }, providerDetail: { color: "#ADC1E6", fontSize: 11, textAlign: "right" }, voiceList: { gap: 9, marginBottom: 9 }, voiceRow: { gap: 9 }, voiceCard: { flex: 1, minHeight: 98, backgroundColor: "#121A31", borderColor: "#2B3B62", borderWidth: 1, borderRadius: 15, padding: 12, flexDirection: "row", alignItems: "center", gap: 8 }, voiceCardActive: { borderColor: "#8E7BFF", backgroundColor: "#1E1A42" }, voiceCardUnavailable: { opacity: 0.48, borderColor: "#4B5369" }, voiceLeft: { width: 22, alignItems: "center" }, radio: { width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: "#657299" }, voiceText: { flex: 1, alignItems: "flex-end", gap: 3 }, voiceName: { color: "#F5F7FF", fontWeight: "900", fontSize: 15, textAlign: "right" }, voiceMeta: { color: "#9EACD0", fontWeight: "600", fontSize: 10, textAlign: "right" }, voiceStatus: { fontSize: 9, fontWeight: "800", textAlign: "right" }, available: { color: "#57E4AC" }, unavailable: { color: "#F3BE73" }, previewButton: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#495DB2", borderRadius: 12, paddingVertical: 11, marginBottom: 9 }, previewText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" }, deviceNote: { color: "#7785AA", fontSize: 11, lineHeight: 17, textAlign: "right", marginBottom: 20 }, settingCard: { backgroundColor: "#121A31", borderColor: "#2B3B62", borderWidth: 1, borderRadius: 16, padding: 14, marginBottom: 20 }, settingLine: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 12 }, settingText: { alignItems: "flex-end", flex: 1, gap: 3 }, settingTitle: { color: "#F5F7FF", fontSize: 14, fontWeight: "900", textAlign: "right" }, settingDetail: { color: "#99A6CC", fontSize: 11, textAlign: "right" }, divider: { height: 1, backgroundColor: "#2A395E", marginVertical: 13 }, ownerCard: { backgroundColor: "#182642", borderColor: "#3B5184", borderWidth: 1, borderRadius: 16, padding: 14, gap: 10, marginBottom: 20 }, ownerHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, ownerTitle: { color: "#F5F7FF", fontSize: 14, fontWeight: "900", textAlign: "right" }, ownerDetail: { color: "#C2CDEA", fontSize: 12, lineHeight: 19, textAlign: "right" }, ownerInput: { color: "#F5F7FF", backgroundColor: "#111A30", borderWidth: 1, borderColor: "#344A7A", borderRadius: 11, minHeight: 56, padding: 10, fontSize: 12, lineHeight: 18, textAlign: "right" }, ownerButton: { borderRadius: 11, paddingVertical: 11, backgroundColor: "#6950E8", alignItems: "center" }, ownerButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" }, ownerRecent: { color: "#92A4CF", fontSize: 11, lineHeight: 17, textAlign: "right" }, dangerCard: { backgroundColor: "#321E2A", borderColor: "#704153", borderWidth: 1, borderRadius: 16, padding: 14, gap: 12 }, dangerText: { color: "#F0C7D0", fontSize: 12, lineHeight: 18, textAlign: "right" }, dangerActions: { flexDirection: "row-reverse", gap: 9 }, dangerButton: { flex: 1, borderRadius: 11, paddingVertical: 11, backgroundColor: "#4A2937", alignItems: "center" }, dangerButtonText: { color: "#FFDCE4", fontSize: 12, fontWeight: "900" }, disabled: { opacity: 0.45 }, pressed: { opacity: 0.72, transform: [{ scale: 0.98 }] }
 });

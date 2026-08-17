@@ -3,10 +3,11 @@ import * as Speech from "expo-speech";
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import { useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { IconButton, ScreenHeading, SectionTitle, StatusPill } from "@/components/rebel-ui";
 import { ScreenContainer } from "@/components/screen-container";
+import { IconSymbol } from "@/components/ui/icon-symbol";
 import { haptic } from "@/lib/haptics";
 import { voiceProfiles, useRebelStore, type ChatMessage } from "@/lib/rebel-store";
 import { trpc } from "@/lib/trpc";
@@ -128,11 +129,11 @@ export default function ChatScreen() {
 
   return (
     <ScreenContainer className="px-4" containerClassName="bg-background" safeAreaClassName="bg-background">
-      <View style={styles.page}>
+      <KeyboardAvoidingView style={styles.page} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={8}>
         <ScreenHeading
           eyebrow="ANALYTICAL COMPANION"
           title="Rebel AI"
-          action={<Pressable accessibilityRole="button" accessibilityLabel="فتح الموافقات" onPress={() => router.push("/approvals" as never)} style={({ pressed }) => [styles.approvalShortcut, pressed && styles.pressed]}><Text style={styles.approvalCount}>مراجعة</Text><Text style={styles.approvalNumber}>›</Text></Pressable>}
+          action={<View style={styles.headerActions}><Pressable accessibilityRole="button" accessibilityLabel="بدء Rebal Live" onPress={() => router.push("/call" as never)} style={({ pressed }) => [styles.callShortcut, pressed && styles.pressed]}><IconSymbol name="mic.fill" size={18} color="#DDEBFF" /></Pressable><Pressable accessibilityRole="button" accessibilityLabel="فتح الموافقات" onPress={() => router.push("/approvals" as never)} style={({ pressed }) => [styles.approvalShortcut, pressed && styles.pressed]}><Text style={styles.approvalCount}>مراجعة</Text><Text style={styles.approvalNumber}>›</Text></Pressable></View>}
         />
         <View style={styles.contextCard}>
           <View style={styles.contextTop}><StatusPill tone="success" label="التحكم بيدك" /><Text style={styles.contextTitle}>ذاكرتك وسياقك</Text></View>
@@ -140,7 +141,7 @@ export default function ChatScreen() {
         </View>
         {messages.length > 1 ? <View style={styles.historySearch}><IconButton icon="magnifyingglass" label="إلغاء بحث سجل المحادثة" onPress={() => setHistoryQuery("")} /><TextInput value={historyQuery} onChangeText={setHistoryQuery} placeholder="ابحث في سجل المحادثة…" placeholderTextColor="#7F8AAE" style={styles.historyInput} accessibilityLabel="بحث في سجل المحادثة" /></View> : null}
         <SectionTitle title="المحادثة" detail="تحليل • ربط • استنتاج" />
-        <FlatList
+        <View style={styles.messageArea}><FlatList
           data={filteredMessages}
           renderItem={renderMessage}
           keyExtractor={(item) => item.id}
@@ -148,7 +149,7 @@ export default function ChatScreen() {
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           ListFooterComponent={chat.isPending ? <View style={styles.thinking}><ActivityIndicator color="#44D7FF" /><Text style={styles.thinkingText}>أرتّب الأدلة والسياق…</Text></View> : null}
-        />
+        /></View>
         {voiceNote ? <Text style={styles.voiceNote}>{voiceNote}</Text> : null}
         <View style={styles.composer}>
           <IconButton icon="mic.fill" label={recorderState.isRecording ? "إيقاف التسجيل" : "بدء محادثة صوتية"} active={recorderState.isRecording} onPress={toggleRecording} disabled={transcription.isPending || chat.isPending} />
@@ -166,13 +167,15 @@ export default function ChatScreen() {
           <IconButton icon="arrow.up.circle.fill" label="إرسال الرسالة" active={Boolean(draft.trim())} onPress={() => sendMessage()} disabled={!draft.trim() || chat.isPending} />
         </View>
         <Text style={styles.footerHint}>المحرك: {preferences.selectedModel} · الصوت: {selectedVoice.name} · {selectedVoice.dialect}</Text>
-      </View>
+      </KeyboardAvoidingView>
     </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
   page: { flex: 1, paddingTop: 10 },
+  headerActions: { flexDirection: "row-reverse", gap: 7, alignItems: "center" },
+  callShortcut: { width: 40, height: 40, backgroundColor: "#264A64", alignItems: "center", justifyContent: "center", borderRadius: 14, borderWidth: 1, borderColor: "#3D789B" },
   approvalShortcut: { backgroundColor: "#201E43", flexDirection: "row-reverse", alignItems: "center", gap: 8, borderRadius: 14, paddingHorizontal: 11, paddingVertical: 9, borderWidth: 1, borderColor: "#443D82" },
   approvalCount: { color: "#D9D2FF", fontWeight: "800", fontSize: 12 },
   approvalNumber: { color: "#44D7FF", fontWeight: "800", fontSize: 20, lineHeight: 20 },
@@ -183,6 +186,7 @@ const styles = StyleSheet.create({
   historySearch: { flexDirection: "row-reverse", alignItems: "center", gap: 8, backgroundColor: "#121A31", borderWidth: 1, borderColor: "#2B3B62", padding: 7, borderRadius: 15, marginBottom: 14 },
   historyInput: { flex: 1, minHeight: 34, color: "#F5F7FF", fontSize: 13, textAlign: "right" },
   list: { flex: 1 },
+  messageArea: { flex: 1, minHeight: 0 },
   listContent: { gap: 12, paddingBottom: 12 },
   messageRow: { width: "100%" },
   messageRowUser: { alignItems: "flex-start" },

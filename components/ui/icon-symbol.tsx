@@ -32,6 +32,9 @@ const MAPPING = {
   "arrow.up.circle.fill": "arrow-upward",
   "xmark": "close",
   "person.circle.fill": "account-circle",
+  "phone.fill": "phone",
+  "phone.down.fill": "call-end",
+  "mic.slash.fill": "mic-off",
 } as IconMapping;
 
 /**
