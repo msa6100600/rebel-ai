@@ -65,6 +65,8 @@ export const voiceProfiles: VoiceProfile[] = [
 export type Preferences = {
   selectedVoiceId: string;
   preferredLanguage: string;
+  selectedProvider: string;
+  selectedModel: string;
   allowSuggestedLearning: boolean;
   hapticsEnabled: boolean;
 };
@@ -118,6 +120,8 @@ const starterMessages: ChatMessage[] = [
 const defaultPreferences: Preferences = {
   selectedVoiceId: "lina",
   preferredLanguage: "ar-SA",
+  selectedProvider: "rebel-core",
+  selectedModel: "gpt-5",
   allowSuggestedLearning: true,
   hapticsEnabled: true,
 };

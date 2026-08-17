@@ -31,6 +31,7 @@ const MAPPING = {
   "sparkles": "auto-awesome",
   "arrow.up.circle.fill": "arrow-upward",
   "xmark": "close",
+  "person.circle.fill": "account-circle",
 } as IconMapping;
 
 /**

@@ -11,6 +11,7 @@ const memorySchema = z.object({
   content: z.string().max(500),
   category: z.enum(["تفضيل", "حقيقة", "سياق", "استنتاج"]),
 });
+const OWNER_USERNAME = "rebal ai owner";
 
 const fallbackReply = (message: string) => ({
   answer: `وصلتني رسالتك: «${message}». تعذّر الاتصال بمحرك التحليل الآن، لذلك لا أستطيع تأكيد أي استنتاج. يمكنك إعادة المحاولة أو متابعة تنظيم الفكرة يدوياً.`,
@@ -38,6 +39,7 @@ export const appRouter = router({
         message: z.string().trim().min(1).max(3500),
         memories: z.array(memorySchema).max(10).default([]),
         language: z.string().max(16).default("ar-SA"),
+        model: z.enum(["gpt-5", "gpt-5-mini", "claude-sonnet-4-6", "gemini-3.1-pro-preview"]).default("gpt-5"),
       }))
       .mutation(async ({ input }) => {
         const memoryContext = input.memories.length
@@ -46,8 +48,7 @@ export const appRouter = router({
 
         try {
           const response = await invokeLLM({
-            model: "gpt-5",
-            reasoning: { effort: "low" },
+            model: input.model,
             maxTokens: 1200,
             response_format: { type: "json_object" },
             messages: [
@@ -97,6 +98,23 @@ export const appRouter = router({
         });
         if ("error" in result) return { ok: false as const, text: "", error: result.error };
         return { ok: true as const, text: result.text.trim(), language: result.language };
+      }),
+  }),
+  owner: router({
+    login: publicProcedure
+      .input(z.object({ username: z.string().trim().min(1).max(64), password: z.string().min(1).max(256) }))
+      .mutation(({ input }) => {
+        const expected = process.env.OWNER_CONSOLE_PASSWORD;
+        const validUsername = input.username.toLocaleLowerCase() === OWNER_USERNAME;
+        if (!expected || !validUsername || input.password !== expected) return { granted: false as const };
+        return { granted: true as const, username: OWNER_USERNAME };
+      }),
+    unlock: publicProcedure
+      .input(z.object({ password: z.string().min(1).max(256) }))
+      .mutation(({ input }) => {
+        const expected = process.env.OWNER_CONSOLE_PASSWORD;
+        if (!expected || input.password !== expected) return { granted: false as const };
+        return { granted: true as const };
       }),
   }),
 });

@@ -55,6 +55,7 @@ export default function ChatScreen() {
         message: text,
         memories: memories.slice(0, 8).map(({ title, content, category }) => ({ title, content, category })),
         language: selectedVoice.language,
+        model: preferences.selectedModel as "gpt-5" | "gpt-5-mini" | "claude-sonnet-4-6" | "gemini-3.1-pro-preview",
       });
       addMessage({ role: "assistant", text: result.answer, insight: result.insight, confidence: result.confidence });
       if (result.suggestedMemory && preferences.allowSuggestedLearning) {
@@ -70,7 +71,7 @@ export default function ChatScreen() {
       addMessage({ role: "assistant", text: "تعذر إتمام التحليل الآن. لم يتم حفظ أي معلومة أو اقتراح إجراء. أعد المحاولة بعد التحقق من الاتصال.", isError: true });
       haptic.warning();
     }
-  }, [addApproval, addMessage, chat, draft, memories, preferences.allowSuggestedLearning, selectedVoice.language]);
+  }, [addApproval, addMessage, chat, draft, memories, preferences.allowSuggestedLearning, preferences.selectedModel, selectedVoice.language]);
 
   const toggleRecording = useCallback(async () => {
     if (Platform.OS === "web") {
@@ -164,7 +165,7 @@ export default function ChatScreen() {
           />
           <IconButton icon="arrow.up.circle.fill" label="إرسال الرسالة" active={Boolean(draft.trim())} onPress={() => sendMessage()} disabled={!draft.trim() || chat.isPending} />
         </View>
-        <Text style={styles.footerHint}>الصوت المختار: {selectedVoice.name} · {selectedVoice.dialect} · يمكنك الاستماع لأي رد من رمز الصوت.</Text>
+        <Text style={styles.footerHint}>المحرك: {preferences.selectedModel} · الصوت: {selectedVoice.name} · {selectedVoice.dialect}</Text>
       </View>
     </ScreenContainer>
   );
