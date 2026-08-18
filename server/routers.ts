@@ -1,17 +1,31 @@
 import { COOKIE_NAME } from "../shared/const.js";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { transcribeAudio } from "./_core/voiceTranscription";
-import { AllFreeProvidersRateLimitedError, FREE_MODELS, FreeProviderError, freeProviderMetadata, runFreeProviderWithFallback, type FreeModel } from "./free-providers";
+import * as db from "./db";
+import { AllFreeProvidersRateLimitedError, FREE_MODELS, FreeProviderError, freeProviderMetadata, runFreeProvider, runFreeProviderWithFallback, type FreeModel, type FreeProvider, type ProviderKeyOverrides } from "./free-providers";
+import { createRebelSession, decryptProviderKey, encryptProviderKey, hashPassword, verifyPassword } from "./rebel-auth";
+import { publicAccount, requireRebelAccount } from "./rebel-session";
 
 const memorySchema = z.object({
   title: z.string().max(160),
   content: z.string().max(500),
   category: z.enum(["تفضيل", "حقيقة", "سياق", "استنتاج"]),
 });
-const OWNER_USERNAME = "rebel ai";
+const OWNER_USERNAME = "rebelai";
+const OWNER_LEGACY_LOGIN_USERNAME = "rebel ai";
+const FREE_DAILY_MESSAGE_LIMIT = 20;
+const PERSONAL_KEY_DAILY_MESSAGE_LIMIT = 150;
+const usernameSchema = z.string().trim().min(3).max(32).regex(/^[a-zA-Z0-9._-]+$/, "استخدم حروفاً إنجليزية أو أرقاماً أو . أو _ أو - فقط.");
+const accountInputSchema = z.object({ username: usernameSchema, password: z.string().min(8).max(128) });
+const loginInputSchema = z.object({ identity: z.string().trim().min(3).max(320), password: z.string().min(8).max(128) });
+const usageDate = () => new Date().toISOString().slice(0, 10);
+const normalizeUsername = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, "");
+const normalizeEmail = (value: string) => value.trim().toLocaleLowerCase();
+const modelForProvider: Record<FreeProvider, FreeModel> = { gemini: "gemini-3.6-flash", groq: "qwen/qwen3.6-27b", mistral: "mistral-small-latest" };
 const GPT_INSTRUCTIONS = {
   "rebel-core": "حلل الطلب بوضوح وبمنظور عام متوازن.",
   "health-guide": "قدّم معلومات صحية عامة وتعليمية فقط. لا تشخّص ولا تصف علاجاً شخصياً، واذكر متى يجب مراجعة طبيب أو الطوارئ.",
@@ -44,6 +58,70 @@ export const appRouter = router({
       } as const;
     }),
   }),
+  account: router({
+    register: publicProcedure
+      .input(accountInputSchema.extend({ displayName: z.string().trim().min(2).max(64), email: z.string().trim().email().max(320) }))
+      .mutation(async ({ input }) => {
+        const username = normalizeUsername(input.username);
+        const email = normalizeEmail(input.email);
+        if (username === OWNER_USERNAME) throw new TRPCError({ code: "CONFLICT", message: "هذا الاسم محجوز لحساب المالك." });
+        const exists = await db.getRebelAccountByUsername(username);
+        if (exists) throw new TRPCError({ code: "CONFLICT", message: "اسم المستخدم مستخدم بالفعل." });
+        if (await db.getRebelAccountByEmail(email)) throw new TRPCError({ code: "CONFLICT", message: "البريد الإلكتروني مستخدم بالفعل." });
+        const account = await db.createRebelAccount({ username, displayName: input.displayName.trim(), email, passwordHash: await hashPassword(input.password) });
+        return { token: createRebelSession({ accountId: account.id, username: account.username, displayName: account.displayName, role: account.role }), account: publicAccount(account) };
+      }),
+    login: publicProcedure
+      .input(loginInputSchema)
+      .mutation(async ({ input }) => {
+        const identity = input.identity.includes("@") ? normalizeEmail(input.identity) : normalizeUsername(input.identity);
+        const username = normalizeUsername(input.identity);
+        const ownerSecret = process.env.OWNER_CONSOLE_PASSWORD;
+        let account = await db.getRebelAccountByIdentity(identity);
+        if (username === OWNER_USERNAME && ownerSecret && input.password === ownerSecret) {
+          if (!account) account = await db.createRebelAccount({ username: OWNER_USERNAME, displayName: "Rebel Ai", passwordHash: await hashPassword(input.password), role: "owner" });
+        } else if (!account || !(await verifyPassword(input.password, account.passwordHash))) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "اسم المستخدم أو كلمة المرور غير صحيحة." });
+        }
+        await db.updateRebelLastLogin(account.id);
+        return { token: createRebelSession({ accountId: account.id, username: account.username, displayName: account.displayName, role: account.role }), account: publicAccount(account) };
+      }),
+    me: publicProcedure.query(async ({ ctx }) => {
+      const account = await requireRebelAccount(ctx.req);
+      const usage = await db.getFreeUsage(account.id, usageDate(), FREE_DAILY_MESSAGE_LIMIT);
+      return { account: publicAccount(account), usage };
+    }),
+    usage: publicProcedure.input(z.object({ provider: z.enum(["gemini", "groq", "mistral"]).optional() }).optional()).query(async ({ ctx, input }) => {
+      const account = await requireRebelAccount(ctx.req);
+      const storedKey = input?.provider ? await db.getRebelProviderKey(account.id, input.provider) : undefined;
+      return db.getFreeUsage(account.id, usageDate(), storedKey ? PERSONAL_KEY_DAILY_MESSAGE_LIMIT : FREE_DAILY_MESSAGE_LIMIT);
+    }),
+    providerKeyStatuses: publicProcedure.query(async ({ ctx }) => {
+      const account = await requireRebelAccount(ctx.req);
+      return db.listRebelProviderKeyStatuses(account.id);
+    }),
+    testAndSaveProviderKey: publicProcedure
+      .input(z.object({ provider: z.enum(["gemini", "groq", "mistral"]), apiKey: z.string().trim().min(10).max(512) }))
+      .mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        const providerKeys: ProviderKeyOverrides = { [input.provider]: input.apiKey.trim() };
+        try {
+          await runFreeProvider(modelForProvider[input.provider], [{ role: "user", content: "أجب بكلمة: جاهز" }], providerKeys);
+        } catch {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "تعذر اختبار المفتاح مع هذا الموفّر. تأكد من صحته ومن تفعيل الوصول المجاني." });
+        }
+        const encrypted = encryptProviderKey(input.apiKey.trim());
+        await db.upsertRebelProviderKey({ accountId: account.id, provider: input.provider, encryptedKey: encrypted.ciphertext, iv: encrypted.iv, authTag: encrypted.authTag });
+        return { saved: true as const, provider: input.provider };
+      }),
+    deleteProviderKey: publicProcedure
+      .input(z.object({ provider: z.enum(["gemini", "groq", "mistral"]) }))
+      .mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        await db.deleteRebelProviderKey(account.id, input.provider);
+        return { deleted: true as const };
+      }),
+  }),
   assistant: router({
     chat: publicProcedure
       .input(z.object({
@@ -53,7 +131,21 @@ export const appRouter = router({
         model: z.enum(FREE_MODELS).default("gemini-3.6-flash"),
         gptId: z.enum(["rebel-core", "health-guide", "legal-guide", "life-coach", "code-studio", "study-partner", "travel-planner"]).default("rebel-core"),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        const selectedProvider = freeProviderMetadata[input.model as FreeModel].provider;
+        const storedKey = await db.getRebelProviderKey(account.id, selectedProvider);
+        let providerKeys: ProviderKeyOverrides | undefined;
+        if (storedKey) {
+          try {
+            providerKeys = { [selectedProvider]: decryptProviderKey({ ciphertext: storedKey.encryptedKey, iv: storedKey.iv, authTag: storedKey.authTag }) };
+          } catch {
+            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "تعذر استخدام مفتاحك الشخصي المحفوظ. احذفه وأضفه من جديد." });
+          }
+        }
+        const quota = providerKeys ? PERSONAL_KEY_DAILY_MESSAGE_LIMIT : FREE_DAILY_MESSAGE_LIMIT;
+        const usage = await db.reserveFreeMessage(account.id, usageDate(), quota);
+        if (!usage.allowed) return { answer: `وصلت إلى حدك اليومي الحالي (${usage.limit} رسالة). جرّب غداً أو أضف مفتاحك الشخصي من الإعدادات.`, insight: "الحصة مستقلة لكل حساب ولا يوجد بديل مدفوع تلقائي.", confidence: 0, suggestedMemory: null, status: "daily_limit" as const, model: input.model, usage };
         const memoryContext = input.memories.length
           ? input.memories.map((memory) => `- ${memory.category}: ${memory.title} — ${memory.content}`).join("\n")
           : "لا توجد ذاكرة محفوظة مرتبطة مباشرة بهذا الحوار.";
@@ -68,7 +160,7 @@ export const appRouter = router({
                 role: "user",
                 content: `اللغة المفضلة: ${input.language}\nالذاكرة المتاحة:\n${memoryContext}\n\nطلب المستخدم:\n${input.message}`,
               },
-            ]);
+            ], providerKeys);
           return {
             answer: result.answer,
             insight: result.fallbackUsed ? `استمر الرد عبر ${freeProviderMetadata[result.model].label} بعد بلوغ حد مؤقت لنموذج مجاني آخر.` : "الرد مولّد للمساعدة في التفكير؛ راجع المصادر قبل اعتماد المعلومات المهمة.",
@@ -76,21 +168,22 @@ export const appRouter = router({
             suggestedMemory: null,
             status: "ok" as const,
             model: result.model,
+            usage,
           };
         } catch (error) {
           if (error instanceof AllFreeProvidersRateLimitedError) {
-            return { answer: "الخدمة تعمل عبر نماذج مجانية وقد وصلت جميعها إلى حد الاستخدام المؤقت أو اليومي الآن. جرّب مرة أخرى بعد قليل.", insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model };
+            return { answer: "الخدمة تعمل عبر نماذج مجانية وقد وصلت جميعها إلى حد الاستخدام المؤقت أو اليومي الآن. جرّب مرة أخرى بعد قليل.", insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage };
           }
           if (error instanceof FreeProviderError) {
             const provider = freeProviderMetadata[input.model as FreeModel];
             if (error.kind === "rate_limit") {
               const wait = error.retryAfterSeconds ? ` حاول مجدداً بعد نحو ${error.retryAfterSeconds} ثانية.` : " انتظر قليلاً ثم أعد المحاولة.";
-              return { answer: `وصلت إلى حد الاستخدام المجاني لـ ${provider.label}.${wait}`, insight: "لم تُرسل هذه المحاولة إلى نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model };
+              return { answer: `وصلت إلى حد الاستخدام المجاني لـ ${provider.label}.${wait}`, insight: "لم تُرسل هذه المحاولة إلى نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage };
             }
-            if (error.kind === "authentication") return { answer: `تعذر تفويض ${provider.label}. تحقق من مفتاح API المجاني لهذا الموفّر.`, insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model };
-            return { answer: `خدمة ${provider.label} غير متاحة الآن. أعد المحاولة لاحقاً أو اختر نموذجاً مجانياً آخر.`, insight: "لم يُستخدم أي نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model };
+            if (error.kind === "authentication") return { answer: `تعذر تفويض ${provider.label}. تحقق من مفتاح API المجاني لهذا الموفّر.`, insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage };
+            return { answer: `خدمة ${provider.label} غير متاحة الآن. أعد المحاولة لاحقاً أو اختر نموذجاً مجانياً آخر.`, insight: "لم يُستخدم أي نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage };
           }
-          return fallbackReply(input.message);
+          return { ...fallbackReply(input.message), usage };
         }
       }),
   }),
@@ -101,7 +194,8 @@ export const appRouter = router({
         mimeType: z.enum(["audio/m4a", "audio/mp4", "audio/webm", "audio/wav", "audio/mpeg"]).default("audio/m4a"),
         language: z.string().max(12).default("ar"),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireRebelAccount(ctx.req);
         const result = await transcribeAudio({
           audioUrl: `data:${input.mimeType};base64,${input.audioBase64}`,
           language: input.language.split("-")[0],
@@ -117,7 +211,7 @@ export const appRouter = router({
       .mutation(({ input }) => {
         const expected = process.env.OWNER_CONSOLE_PASSWORD;
         const normalizedUsername = input.username.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-        const validUsername = normalizedUsername === OWNER_USERNAME;
+        const validUsername = normalizedUsername === OWNER_LEGACY_LOGIN_USERNAME;
         if (!expected || !validUsername || input.password !== expected) return { granted: false as const };
         return { granted: true as const, username: OWNER_USERNAME };
       }),

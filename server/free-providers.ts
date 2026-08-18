@@ -3,6 +3,7 @@ export const FREE_MODEL_PRIORITY = [...FREE_MODELS];
 
 export type FreeModel = (typeof FREE_MODELS)[number];
 export type FreeProvider = "gemini" | "groq" | "mistral";
+export type ProviderKeyOverrides = Partial<Record<FreeProvider, string>>;
 
 type ProviderMessage = { role: "system" | "user"; content: string };
 
@@ -55,8 +56,8 @@ const removeReasoning = (value: unknown) => typeof value === "string" ? value.re
 const systemMessage = (messages: ProviderMessage[]) => messages.find((message) => message.role === "system")?.content ?? "";
 const userMessage = (messages: ProviderMessage[]) => messages.filter((message) => message.role === "user").map((message) => message.content).join("\n\n");
 
-async function callGemini(messages: ProviderMessage[]) {
-  const key = process.env.GEMINI_API_KEY;
+async function callGemini(messages: ProviderMessage[], keyOverride?: string) {
+  const key = keyOverride ?? process.env.GEMINI_API_KEY;
   if (!key) throw new FreeProviderError("authentication", "gemini");
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(key)}`, {
     method: "POST",
@@ -72,8 +73,8 @@ async function callGemini(messages: ProviderMessage[]) {
   return ensureText(payload.candidates?.[0]?.content?.parts?.map((part) => part.text).filter((text): text is string => typeof text === "string").join("\n"), "gemini");
 }
 
-async function callOpenAiCompatible(provider: "groq" | "mistral", model: FreeModel, messages: ProviderMessage[]) {
-  const key = provider === "groq" ? process.env.GROQ_API_KEY : process.env.MISTRAL_API_KEY;
+async function callOpenAiCompatible(provider: "groq" | "mistral", model: FreeModel, messages: ProviderMessage[], keyOverride?: string) {
+  const key = keyOverride ?? (provider === "groq" ? process.env.GROQ_API_KEY : process.env.MISTRAL_API_KEY);
   if (!key) throw new FreeProviderError("authentication", provider);
   const endpoint = provider === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://api.mistral.ai/v1/chat/completions";
   const response = await fetch(endpoint, {
@@ -86,18 +87,18 @@ async function callOpenAiCompatible(provider: "groq" | "mistral", model: FreeMod
   return ensureText(removeReasoning(payload.choices?.[0]?.message?.content), provider);
 }
 
-export async function runFreeProvider(model: FreeModel, messages: ProviderMessage[]) {
-  if (model === "gemini-3.6-flash") return callGemini(messages);
-  if (model === "qwen/qwen3.6-27b") return callOpenAiCompatible("groq", model, messages);
-  return callOpenAiCompatible("mistral", model, messages);
+export async function runFreeProvider(model: FreeModel, messages: ProviderMessage[], providerKeys?: ProviderKeyOverrides) {
+  if (model === "gemini-3.6-flash") return callGemini(messages, providerKeys?.gemini);
+  if (model === "qwen/qwen3.6-27b") return callOpenAiCompatible("groq", model, messages, providerKeys?.groq);
+  return callOpenAiCompatible("mistral", model, messages, providerKeys?.mistral);
 }
 
-export async function runFreeProviderWithFallback(initialModel: FreeModel, messages: ProviderMessage[]) {
+export async function runFreeProviderWithFallback(initialModel: FreeModel, messages: ProviderMessage[], providerKeys?: ProviderKeyOverrides) {
   const order = [initialModel, ...FREE_MODEL_PRIORITY.filter((model) => model !== initialModel)] as FreeModel[];
   const rateLimited: FreeModel[] = [];
   for (const model of order) {
     try {
-      const answer = await runFreeProvider(model, messages);
+      const answer = await runFreeProvider(model, messages, providerKeys);
       return { answer, model, fallbackUsed: model !== initialModel, attemptedModels: order.slice(0, rateLimited.length + 1) };
     } catch (error) {
       if (error instanceof FreeProviderError && error.kind === "rate_limit") {

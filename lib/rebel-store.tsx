@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import { useRebelSession } from "@/lib/rebel-session";
 
 export type ChatMessage = {
   id: string;
@@ -128,7 +129,7 @@ type RebelState = {
   clearMemories: () => void;
 };
 
-const STORAGE_KEY = "rebel-ai-state-v3";
+const STORAGE_KEY_PREFIX = "rebel-ai-state-v4:";
 const RETIRED_STORAGE_KEYS = ["rebel-ai-state-v1", "rebel-ai-state-v2"];
 
 const defaultSources: SourceItem[] = [
@@ -163,6 +164,8 @@ const RebelContext = createContext<RebelState | null>(null);
 const uid = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 export function RebelStoreProvider({ children }: { children: ReactNode }) {
+  const { session } = useRebelSession();
+  const accountStorageKey = session ? `${STORAGE_KEY_PREFIX}${session.account.id}` : null;
   const [hydrated, setHydrated] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>(starterMessages);
   const [memories, setMemories] = useState<MemoryItem[]>([]);
@@ -172,9 +175,15 @@ export function RebelStoreProvider({ children }: { children: ReactNode }) {
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences);
 
   useEffect(() => {
+    setHydrated(false);
+    setMessages(starterMessages);
+    setMemories([]);
+    setApprovals([]);
+    setOwnerRequests([]);
+    setPreferences(defaultPreferences);
     AsyncStorage.multiRemove(RETIRED_STORAGE_KEYS)
       .catch(() => undefined)
-      .then(() => AsyncStorage.getItem(STORAGE_KEY))
+      .then(() => accountStorageKey ? AsyncStorage.getItem(accountStorageKey) : null)
       .then((raw) => {
         if (!raw) return;
         const parsed = JSON.parse(raw) as Partial<Pick<RebelState, "messages" | "memories" | "approvals" | "ownerRequests" | "preferences">>;
@@ -190,12 +199,12 @@ export function RebelStoreProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => undefined)
       .finally(() => setHydrated(true));
-  }, []);
+  }, [accountStorageKey]);
 
   useEffect(() => {
-    if (!hydrated) return;
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ messages, memories, approvals, ownerRequests, preferences })).catch(() => undefined);
-  }, [approvals, hydrated, memories, messages, ownerRequests, preferences]);
+    if (!hydrated || !accountStorageKey) return;
+    AsyncStorage.setItem(accountStorageKey, JSON.stringify({ messages, memories, approvals, ownerRequests, preferences })).catch(() => undefined);
+  }, [accountStorageKey, approvals, hydrated, memories, messages, ownerRequests, preferences]);
 
   const value = useMemo<RebelState>(
     () => ({

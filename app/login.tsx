@@ -5,82 +5,61 @@ import { useRouter } from "expo-router";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { ScreenContainer } from "@/components/screen-container";
 import { haptic } from "@/lib/haptics";
-import { startOwnerSession, useOwnerSession } from "@/lib/owner-session";
+import { useRebelSession } from "@/lib/rebel-session";
 import { trpc } from "@/lib/trpc";
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { isOwnerSession, loading } = useOwnerSession();
-  const [ownerPassword, setOwnerPassword] = useState("");
-  const [ownerError, setOwnerError] = useState("");
-  const ownerLogin = trpc.owner.login.useMutation();
+  const { session, loading, startSession } = useRebelSession();
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const login = trpc.account.login.useMutation();
+  const register = trpc.account.register.useMutation();
+  const pending = login.isPending || register.isPending;
 
-  useEffect(() => {
-    if (isOwnerSession) router.replace("/(tabs)" as never);
-  }, [isOwnerSession, router]);
+  useEffect(() => { if (session) router.replace("/(tabs)" as never); }, [router, session]);
 
-  const handleOwnerLogin = async () => {
-    if (!ownerPassword || ownerLogin.isPending) return;
-    setOwnerError("");
+  const submit = async () => {
+    if (!username.trim() || !password || (mode === "register" && (!displayName.trim() || !email.trim())) || pending) return;
+    setError("");
     try {
-      const result = await ownerLogin.mutateAsync({ username: "Rebel Ai", password: ownerPassword.trim() });
-      setOwnerPassword("");
-      if (!result.granted) {
-        setOwnerError("بيانات حساب Rebel Ai غير صحيحة.");
-        haptic.warning();
-        return;
-      }
-      await startOwnerSession();
+      const result = mode === "login"
+        ? await login.mutateAsync({ identity: username.trim(), password })
+        : await register.mutateAsync({ username: username.trim(), displayName: displayName.trim(), email: email.trim(), password });
+      await startSession(result);
+      setPassword("");
       haptic.success();
       router.replace("/(tabs)" as never);
-    } catch {
-      setOwnerError("تعذر تسجيل الدخول الآن. أعد المحاولة لاحقاً.");
+    } catch (reason: unknown) {
+      const message = reason instanceof Error ? reason.message : "تعذر إتمام العملية الآن.";
+      setError(message.includes("اسم المستخدم") || message.includes("كلمة المرور") || message.includes("محجوز") ? message : "تعذر إتمام العملية الآن. تأكد من اتصالك ثم أعد المحاولة.");
       haptic.warning();
     }
   };
 
-  return (
-    <ScreenContainer edges={["top", "bottom", "left", "right"]} className="px-6" containerClassName="bg-background" safeAreaClassName="bg-background">
-      <View style={styles.page}>
-        <View style={styles.mark}><IconSymbol name="brain.head.profile" size={42} color="#2563EB" /></View>
-        <Text style={styles.eyebrow}>YOUR THINKING PARTNER</Text>
-        <Text style={styles.title}>Rebel AI</Text>
-        <Text style={styles.subtitle}>سجّل الدخول إلى حساب Rebel Ai لبدء المحادثة والتحليل والميزات الصوتية.</Text>
-        <View style={styles.featureList}>
-          <Feature icon="sparkles" label="تحليل منظّم يوضح درجة اليقين" />
-          <Feature icon="checkmark.seal.fill" label="موافقتك مطلوبة قبل حفظ أي تعلّم" />
-          <Feature icon="speaker.wave.2.fill" label="محادثة كتابية وصوتية بلغات متعددة" />
-        </View>
-        <View style={styles.ownerDivider}><View style={styles.line} /><Text style={styles.dividerText}>الحساب الوحيد</Text><View style={styles.line} /></View>
-        <View style={styles.ownerBox}>
-          <View style={styles.usernameValue}><IconSymbol name="person.circle.fill" size={20} color="#2563EB" /><Text style={styles.usernameText}>Rebel Ai</Text></View>
-          <TextInput value={ownerPassword} onChangeText={setOwnerPassword} placeholder="كلمة مرور Rebel Ai" placeholderTextColor="#8592B8" secureTextEntry autoCapitalize="none" style={styles.ownerInput} accessibilityLabel="كلمة مرور Rebel Ai" onSubmitEditing={handleOwnerLogin} returnKeyType="done" />
-          <Pressable accessibilityRole="button" disabled={!ownerPassword || ownerLogin.isPending || loading} onPress={handleOwnerLogin} style={({ pressed }) => [styles.ownerLoginButton, (!ownerPassword || ownerLogin.isPending || loading) && styles.disabled, pressed && styles.pressed]}><Text style={styles.ownerLoginText}>{ownerLogin.isPending ? "جارٍ الدخول…" : "دخول Rebel Ai"}</Text></Pressable>
-          {ownerError ? <Text style={styles.ownerError}>{ownerError}</Text> : null}
-        </View>
-        <Text style={styles.footnote}>تتم المصادقة عبر بوابة آمنة، ولا يخزن Rebel AI كلمة مرورك داخل التطبيق.</Text>
-      </View>
-    </ScreenContainer>
-  );
+  const changeMode = (next: "login" | "register") => { setMode(next); setError(""); setPassword(""); };
+
+  return <ScreenContainer edges={["top", "bottom", "left", "right"]} className="px-6" containerClassName="bg-background" safeAreaClassName="bg-background"><View style={styles.page}>
+    <View style={styles.mark}><IconSymbol name="brain.head.profile" size={42} color="#2563EB" /></View>
+    <Text style={styles.eyebrow}>YOUR THINKING PARTNER</Text><Text style={styles.title}>Rebel AI</Text>
+    <Text style={styles.subtitle}>{mode === "login" ? "سجّل دخولك بالبريد الإلكتروني أو اسم المستخدم لاستعادة محادثاتك وإعداداتك." : "أنشئ حساباً مستقلاً ببريد إلكتروني لتكون استعادة الحساب ممكنة في الإصدارات القادمة."}</Text>
+    <View style={styles.switcher}><Pressable accessibilityRole="button" onPress={() => changeMode("register")} style={({ pressed }) => [styles.modeButton, mode === "register" && styles.modeButtonActive, pressed && styles.pressed]}><Text style={[styles.modeText, mode === "register" && styles.modeTextActive]}>حساب جديد</Text></Pressable><Pressable accessibilityRole="button" onPress={() => changeMode("login")} style={({ pressed }) => [styles.modeButton, mode === "login" && styles.modeButtonActive, pressed && styles.pressed]}><Text style={[styles.modeText, mode === "login" && styles.modeTextActive]}>تسجيل الدخول</Text></Pressable></View>
+    <View style={styles.form}>
+      {mode === "register" ? <><TextInput value={displayName} onChangeText={setDisplayName} placeholder="الاسم الذي سيظهر في حسابك" placeholderTextColor="#8592B8" style={styles.input} accessibilityLabel="اسم العرض" textAlign="right" returnKeyType="next" /><TextInput value={email} onChangeText={setEmail} placeholder="البريد الإلكتروني" placeholderTextColor="#8592B8" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" style={styles.input} accessibilityLabel="البريد الإلكتروني" textAlign="left" returnKeyType="next" /></> : null}
+      <TextInput value={username} onChangeText={setUsername} placeholder={mode === "login" ? "البريد الإلكتروني أو اسم المستخدم" : "اسم المستخدم بالإنجليزية، مثال: ahmed_ali"} placeholderTextColor="#8592B8" autoCapitalize="none" autoCorrect={false} style={styles.input} accessibilityLabel={mode === "login" ? "البريد الإلكتروني أو اسم المستخدم" : "اسم المستخدم"} textAlign={mode === "login" ? "left" : "right"} returnKeyType="next" />
+      <TextInput value={password} onChangeText={setPassword} placeholder="كلمة المرور، 8 أحرف على الأقل" placeholderTextColor="#8592B8" secureTextEntry autoCapitalize="none" style={styles.input} accessibilityLabel="كلمة المرور" textAlign="right" onSubmitEditing={submit} returnKeyType="done" />
+      <Pressable accessibilityRole="button" disabled={!username.trim() || !password || (mode === "register" && (!displayName.trim() || !email.trim())) || pending || loading} onPress={submit} style={({ pressed }) => [styles.submit, (!username.trim() || !password || (mode === "register" && (!displayName.trim() || !email.trim())) || pending || loading) && styles.disabled, pressed && styles.pressed]}><Text style={styles.submitText}>{pending ? "جارٍ المتابعة…" : mode === "login" ? "دخول إلى Rebel AI" : "إنشاء الحساب"}</Text></Pressable>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+    </View>
+    <View style={styles.featureList}><Feature icon="checkmark.seal.fill" label="ذاكرتك ومحادثاتك منفصلة عن أي مستخدم آخر" /><Feature icon="sparkles" label="ثلاثة نماذج مجانية مع تحويل تلقائي هادئ" /><Feature icon="speaker.wave.2.fill" label="محادثة كتابية وصوتية بلغات متعددة" /></View>
+    <Text style={styles.footnote}>لا نخزن كلمة المرور كنص عادي. يمكنك تسجيل الخروج في أي وقت من صفحة حسابك.</Text>
+  </View></ScreenContainer>;
 }
 
-function Feature({ icon, label }: { icon: Parameters<typeof IconSymbol>[0]["name"]; label: string }) {
-  return <View style={styles.feature}><IconSymbol name={icon} size={19} color="#2563EB" /><Text style={styles.featureText}>{label}</Text></View>;
-}
+function Feature({ icon, label }: { icon: Parameters<typeof IconSymbol>[0]["name"]; label: string }) { return <View style={styles.feature}><IconSymbol name={icon} size={18} color="#2563EB" /><Text style={styles.featureText}>{label}</Text></View>; }
 
-const styles = StyleSheet.create({
-  page: { flex: 1, alignItems: "center", justifyContent: "center", gap: 13, maxWidth: 440, alignSelf: "center" },
-  mark: { width: 74, height: 74, borderRadius: 25, backgroundColor: "#EAF1FF", alignItems: "center", justifyContent: "center", marginBottom: 5 },
-  eyebrow: { color: "#73737D", fontWeight: "800", fontSize: 10, letterSpacing: 1.5, textAlign: "center" },
-  title: { color: "#1F1F23", fontSize: 34, fontWeight: "800", letterSpacing: -0.8 },
-  subtitle: { color: "#707079", fontSize: 15, lineHeight: 23, textAlign: "center", maxWidth: 330, marginBottom: 7 },
-  featureList: { width: "100%", backgroundColor: "#FFFFFF", borderColor: "#E5E5EA", borderWidth: 1, borderRadius: 18, padding: 15, gap: 13 },
-  feature: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
-  featureText: { color: "#4D4D56", fontSize: 13, flex: 1, textAlign: "right" },
-  loginButton: { width: "100%", minHeight: 54, borderRadius: 15, backgroundColor: "#2563EB", alignItems: "center", justifyContent: "center", flexDirection: "row-reverse", gap: 9, marginTop: 8 },
-  loginText: { color: "#FFFFFF", fontSize: 15, fontWeight: "900" },
-  ownerDivider: { flexDirection: "row-reverse", alignItems: "center", gap: 10, width: "100%", marginTop: 2 }, line: { height: 1, flex: 1, backgroundColor: "#E2E2E6" }, dividerText: { color: "#87878F", fontSize: 11, fontWeight: "800" },
-  ownerBox: { width: "100%", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E5EA", borderRadius: 16, padding: 12, gap: 9 }, usernameValue: { minHeight: 43, borderRadius: 10, borderWidth: 1, borderColor: "#DEDEE3", backgroundColor: "#F8FAFF", flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8 }, usernameText: { color: "#25252B", fontSize: 14, fontWeight: "800" }, ownerInput: { minHeight: 43, borderRadius: 10, borderWidth: 1, borderColor: "#DEDEE3", color: "#25252B", backgroundColor: "#FFFFFF", textAlign: "right", paddingHorizontal: 11, fontSize: 13 }, ownerLoginButton: { minHeight: 43, borderRadius: 10, backgroundColor: "#2563EB", alignItems: "center", justifyContent: "center" }, ownerLoginText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" }, ownerError: { color: "#C7374F", fontSize: 11, textAlign: "right" },
-  footnote: { color: "#8B8B94", fontSize: 11, lineHeight: 18, textAlign: "center", maxWidth: 320 },
-  disabled: { opacity: 0.6 }, pressed: { opacity: 0.78, transform: [{ scale: 0.98 }] },
-});
+const styles = StyleSheet.create({ page: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, maxWidth: 440, alignSelf: "center" }, mark: { width: 72, height: 72, borderRadius: 25, backgroundColor: "#EAF1FF", alignItems: "center", justifyContent: "center", marginBottom: 2 }, eyebrow: { color: "#73737D", fontWeight: "800", fontSize: 10, letterSpacing: 1.5, textAlign: "center" }, title: { color: "#1F1F23", fontSize: 34, fontWeight: "800", letterSpacing: -0.8 }, subtitle: { color: "#707079", fontSize: 14, lineHeight: 21, textAlign: "center", maxWidth: 340 }, switcher: { width: "100%", flexDirection: "row-reverse", backgroundColor: "#F1F2F6", borderRadius: 12, padding: 4, gap: 4 }, modeButton: { flex: 1, alignItems: "center", borderRadius: 9, paddingVertical: 9 }, modeButtonActive: { backgroundColor: "#FFFFFF", shadowColor: "#1E293B", shadowOpacity: 0.08, shadowRadius: 5, elevation: 1 }, modeText: { color: "#787881", fontSize: 12, fontWeight: "800" }, modeTextActive: { color: "#2563EB" }, form: { width: "100%", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E5EA", borderRadius: 16, padding: 12, gap: 9 }, input: { minHeight: 45, borderRadius: 10, borderWidth: 1, borderColor: "#DEDEE3", color: "#25252B", backgroundColor: "#FFFFFF", paddingHorizontal: 12, fontSize: 13 }, submit: { minHeight: 45, borderRadius: 10, backgroundColor: "#2563EB", alignItems: "center", justifyContent: "center", marginTop: 2 }, submitText: { color: "#FFFFFF", fontSize: 14, fontWeight: "900" }, error: { color: "#C7374F", fontSize: 11, lineHeight: 16, textAlign: "right" }, featureList: { width: "100%", backgroundColor: "#FFFFFF", borderColor: "#E5E5EA", borderWidth: 1, borderRadius: 16, padding: 13, gap: 10 }, feature: { flexDirection: "row-reverse", alignItems: "center", gap: 9 }, featureText: { color: "#4D4D56", fontSize: 12, flex: 1, textAlign: "right" }, footnote: { color: "#8B8B94", fontSize: 10, lineHeight: 16, textAlign: "center", maxWidth: 320 }, disabled: { opacity: 0.55 }, pressed: { opacity: 0.78, transform: [{ scale: 0.98 }] } });

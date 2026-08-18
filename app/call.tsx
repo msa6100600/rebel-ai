@@ -2,7 +2,7 @@ import { File } from "expo-file-system";
 import * as Speech from "expo-speech";
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import { useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { IconSymbol } from "@/components/ui/icon-symbol";
@@ -26,6 +26,8 @@ export default function CallScreen() {
   const [muted, setMuted] = useState(false);
   const [lastHeard, setLastHeard] = useState("اضغط زر الميكروفون لبدء التحدث.");
   const [lastAnswer, setLastAnswer] = useState("سأستمع إلى رسالتك ثم أجيبك بصوت واضح.");
+  const recordingRef = useRef(false);
+  const pressActiveRef = useRef(false);
 
   useEffect(() => {
     const ready = setTimeout(() => setStatus("ready"), 700);
@@ -48,28 +50,40 @@ export default function CallScreen() {
     Speech.speak(text, { language: selectedVoice.language, voice: nativeVoice?.identifier, rate: selectedVoice.rate, pitch: selectedVoice.pitch, onDone: () => setStatus("ready"), onError: () => setStatus("ready") });
   };
 
-  const handleVoiceTurn = async () => {
+  const startVoiceRecording = async () => {
     if (muted || status === "thinking" || status === "speaking") return;
     if (Platform.OS === "web") {
       Alert.alert("Rebal Live", "التسجيل يعمل من تطبيق Android بعد تثبيته. استخدم نسخة الهاتف لاختبار المحادثة الصوتية.");
       return;
     }
     try {
-      if (!recorderState.isRecording) {
-        const permission = await requestRecordingPermissionsAsync();
-        if (!permission.granted) {
-          setLastHeard("يلزم السماح بالميكروفون لبدء Rebal Live.");
-          return;
-        }
-        await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
-        await recorder.prepareToRecordAsync();
-        recorder.record();
-        setStatus("listening");
-        setLastHeard("جاري الاستماع… اضغط مرة أخرى لإرسال ما قلته.");
-        haptic.medium();
+      if (recordingRef.current || recorderState.isRecording) return;
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        setLastHeard("يلزم السماح بالميكروفون لبدء Rebal Live.");
         return;
       }
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      recordingRef.current = true;
+      setStatus("listening");
+      setLastHeard("جاري الاستماع… ارفع إصبعك لإرسال ما قلته.");
+      haptic.medium();
+      if (!pressActiveRef.current) setTimeout(() => { finishVoiceTurn(); }, 0);
+    } catch {
+      recordingRef.current = false;
+      setStatus("ready");
+      setLastHeard("تعذر بدء التسجيل. تحقق من إذن الميكروفون ثم أعد المحاولة.");
+      haptic.warning();
+    }
+  };
+
+  const finishVoiceTurn = async () => {
+    if (!recordingRef.current && !recorderState.isRecording) return;
+    try {
       await recorder.stop();
+      recordingRef.current = false;
       const audioUri = recorder.uri;
       if (!audioUri) throw new Error("missing audio");
       setStatus("thinking");
@@ -78,11 +92,12 @@ export default function CallScreen() {
       setLastHeard(transcriptionResult.text);
       addMessage({ role: "user", text: transcriptionResult.text });
       const result = await chat.mutateAsync({ message: transcriptionResult.text, memories: memories.slice(0, 8).map(({ title, content, category }) => ({ title, content, category })), language: selectedVoice.language, model: preferences.selectedModel, gptId: preferences.selectedGptId });
-      addMessage({ role: "assistant", text: result.answer, insight: result.insight, confidence: result.confidence });
+      addMessage({ role: "assistant", text: result.answer, insight: result.insight, confidence: result.confidence, model: result.model });
       setLastAnswer(result.answer);
       haptic.success();
       await speakAnswer(result.answer);
     } catch {
+      recordingRef.current = false;
       setStatus("ready");
       setLastAnswer("تعذر إتمام هذه الجولة الصوتية. تحقق من اتصال الإنترنت وجرّب مرة أخرى.");
       haptic.warning();
@@ -91,12 +106,16 @@ export default function CallScreen() {
 
   const toggleMute = async () => {
     if (recorderState.isRecording) await recorder.stop().catch(() => undefined);
+    recordingRef.current = false;
+    pressActiveRef.current = false;
     setMuted((value) => !value);
     setStatus("ready");
     haptic.medium();
   };
   const endCall = async () => {
     if (recorderState.isRecording) await recorder.stop().catch(() => undefined);
+    recordingRef.current = false;
+    pressActiveRef.current = false;
     await Speech.stop();
     setStatus("ended");
     haptic.medium();
@@ -108,7 +127,7 @@ export default function CallScreen() {
     <View style={[styles.orb, status === "listening" && styles.orbListening, status === "speaking" && styles.orbSpeaking]}><View style={styles.orbInner}><IconSymbol name="brain.head.profile" size={62} color="#2563EB" /></View></View>
     <View style={styles.identity}><Text style={styles.identityName}>{selectedVoice.name}</Text><Text style={styles.identityDetail}>{selectedVoice.dialect} · {selectedVoice.language}</Text></View>
     <View style={styles.transcriptCard}><Text style={styles.cardLabel}>أنت قلت</Text><Text style={styles.transcript}>{lastHeard}</Text></View><View style={styles.answerCard}><Text style={styles.cardLabel}>رد Rebel AI</Text><Text style={styles.answer}>{lastAnswer}</Text></View>
-    <View style={styles.controls}><Pressable accessibilityRole="button" accessibilityLabel={muted ? "إلغاء كتم الميكروفون" : "كتم الميكروفون"} onPress={toggleMute} style={({ pressed }) => [styles.secondaryControl, muted && styles.mutedControl, pressed && styles.pressed]}><IconSymbol name={muted ? "mic.slash.fill" : "mic.fill"} size={25} color="#4E4E58" /></Pressable><Pressable accessibilityRole="button" accessibilityLabel={recorderState.isRecording ? "إيقاف وإرسال كلامك" : "بدء التحدث مع Rebal Live"} disabled={status === "thinking" || status === "speaking" || muted} onPress={handleVoiceTurn} style={({ pressed }) => [styles.primaryControl, recorderState.isRecording && styles.recordingControl, muted && styles.disabled, pressed && styles.pressed]}>{status === "thinking" ? <ActivityIndicator color="#FFFFFF" /> : <IconSymbol name="mic.fill" size={30} color="#FFFFFF" />}</Pressable><Pressable accessibilityRole="button" accessibilityLabel="إنهاء Rebal Live" onPress={endCall} style={({ pressed }) => [styles.endControl, pressed && styles.pressed]}><IconSymbol name="xmark" size={23} color="#B2273E" /></Pressable></View><Text style={styles.hint}>{recorderState.isRecording ? "اضغط الميكروفون مرة أخرى عند نهاية دورك." : muted ? "الميكروفون مكتوم." : "تحدث في دورك، ثم سيحلل Rebel AI رسالتك ويرد بصوت قبل الجولة التالية."}</Text>
+    <View style={styles.controls}><Pressable accessibilityRole="button" accessibilityLabel={muted ? "إلغاء كتم الميكروفون" : "كتم الميكروفون"} onPress={toggleMute} style={({ pressed }) => [styles.secondaryControl, muted && styles.mutedControl, pressed && styles.pressed]}><IconSymbol name={muted ? "mic.slash.fill" : "mic.fill"} size={25} color="#4E4E58" /></Pressable><Pressable accessibilityRole="button" accessibilityLabel={recorderState.isRecording ? "حرر الزر لإرسال كلامك" : "اضغط باستمرار للتحدث مع Rebal Live"} disabled={status === "thinking" || status === "speaking" || muted} onPressIn={() => { pressActiveRef.current = true; startVoiceRecording(); }} onPressOut={() => { pressActiveRef.current = false; finishVoiceTurn(); }} style={({ pressed }) => [styles.primaryControl, (recorderState.isRecording || pressed) && styles.recordingControl, muted && styles.disabled, pressed && styles.pressed]}>{status === "thinking" ? <ActivityIndicator color="#FFFFFF" /> : <IconSymbol name="mic.fill" size={30} color="#FFFFFF" />}</Pressable><Pressable accessibilityRole="button" accessibilityLabel="إنهاء Rebal Live" onPress={endCall} style={({ pressed }) => [styles.endControl, pressed && styles.pressed]}><IconSymbol name="xmark" size={23} color="#B2273E" /></Pressable></View><Text style={styles.hint}>{recorderState.isRecording ? "استمر بالضغط أثناء الحديث، ثم ارفع إصبعك لإرسال الجولة." : muted ? "الميكروفون مكتوم." : "اضغط باستمرار وتحدث؛ عند الإفلات سيحلل Rebel AI كلامك ويرد بصوت قبل الجولة التالية."}</Text>
   </View></ScreenContainer>;
 }
 
