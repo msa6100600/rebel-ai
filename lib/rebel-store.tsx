@@ -118,7 +118,9 @@ type RebelState = {
   ownerRequests: OwnerRequest[];
   preferences: Preferences;
   addMessage: (message: Omit<ChatMessage, "id" | "createdAt">) => void;
+  replaceMessages: (messages: ChatMessage[]) => void;
   addMemory: (memory: Omit<MemoryItem, "id" | "createdAt">) => void;
+  replaceMemories: (memories: MemoryItem[]) => void;
   removeMemory: (id: string) => void;
   addApproval: (approval: Omit<ApprovalItem, "id" | "createdAt" | "status">) => void;
   approve: (id: string) => void;
@@ -216,7 +218,9 @@ export function RebelStoreProvider({ children }: { children: ReactNode }) {
       ownerRequests,
       preferences,
       addMessage: (message) => setMessages((current) => [...current, { ...message, id: uid("msg"), createdAt: new Date().toISOString() }]),
+      replaceMessages: (next) => setMessages(next.length ? next : starterMessages),
       addMemory: (memory) => setMemories((current) => [{ ...memory, id: uid("mem"), createdAt: new Date().toISOString() }, ...current]),
+      replaceMemories: (next) => setMemories(next),
       removeMemory: (id) => setMemories((current) => current.filter((memory) => memory.id !== id)),
       addApproval: (approval) => setApprovals((current) => [{ ...approval, id: uid("apr"), createdAt: new Date().toISOString(), status: "بانتظار قرارك" }, ...current]),
       approve: (id) => setApprovals((current) => current.map((approval) => {

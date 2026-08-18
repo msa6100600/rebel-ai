@@ -1,0 +1,48 @@
+import { useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+
+import { IconSymbol } from "@/components/ui/icon-symbol";
+import { ScreenHeading, StatusPill } from "@/components/rebel-ui";
+import { ScreenContainer } from "@/components/screen-container";
+import { useRebelSession } from "@/lib/rebel-session";
+import { trpc } from "@/lib/trpc";
+
+const outcomeLabels: Record<string, string> = { ok: "ناجح", daily_limit: "حد يومي", rate_limited: "حد زمني أو موفّر", provider_error: "خطأ موفّر", fallback_error: "تعذر المسار" };
+const providerLabels: Record<string, string> = { gemini: "Gemini", groq: "Groq", mistral: "Mistral", unknown: "غير محدد" };
+
+export default function AnalyticsScreen() {
+  const router = useRouter();
+  const { session } = useRebelSession();
+  const [days, setDays] = useState<7 | 30>(7);
+  const isOwner = session?.account.role === "owner";
+  const analytics = trpc.owner.analytics.useQuery({ days }, { enabled: isOwner });
+  const data = analytics.data;
+  const maxDaily = Math.max(1, ...(data?.daily.map((item) => item.requests) ?? [1]));
+
+  if (!isOwner) return <ScreenContainer className="px-4" containerClassName="bg-background" safeAreaClassName="bg-background"><View style={styles.denied}><IconSymbol name="lock.fill" size={30} color="#B2273E" /><Text style={styles.deniedTitle}>هذه الصفحة مخصّصة للمالك</Text><Text style={styles.deniedText}>لا تعرض Rebel AI تحليلات الاستخدام إلا لحساب Rebel Ai.</Text><Pressable onPress={() => router.back()} style={styles.backButton}><Text style={styles.backButtonText}>العودة</Text></Pressable></View></ScreenContainer>;
+
+  return <ScreenContainer className="px-4" containerClassName="bg-background" safeAreaClassName="bg-background"><ScrollView contentContainerStyle={styles.page} showsVerticalScrollIndicator={false}>
+    <View style={styles.header}><Pressable onPress={() => router.back()} style={styles.backIcon}><IconSymbol name="chevron.right" size={22} color="#222227" /></Pressable><ScreenHeading eyebrow="OWNER ONLY · AGGREGATED" title="تحليلات الاستخدام" action={<StatusPill tone="success" label="مجمّعة" />} /></View>
+    <View style={styles.privacy}><IconSymbol name="checkmark.seal.fill" size={20} color="#16835D" /><Text style={styles.privacyText}>تعرض هذه اللوحة أرقام التشغيل فقط. لا تُظهر محتوى المحادثات أو الذاكرة أو البريد أو مفاتيح API.</Text></View>
+    <View style={styles.periods}>{([7, 30] as const).map((value) => <Pressable key={value} onPress={() => setDays(value)} style={[styles.period, days === value && styles.periodActive]}><Text style={[styles.periodText, days === value && styles.periodTextActive]}>آخر {value} يوم</Text></Pressable>)}</View>
+    {analytics.isLoading ? <View style={styles.loading}><Text style={styles.loadingText}>جارٍ تجميع مؤشرات التشغيل…</Text></View> : data ? <>
+      <View style={styles.metrics}><Metric label="طلبات الذكاء" value={data.requests} detail={`خلال ${data.days} أيام`} /><Metric label="حسابات نشطة" value={data.activeAccounts} detail={`من أصل ${data.totalAccounts}`} /><Metric label="متوسط الرد" value={data.averageLatencyMs ? `${(data.averageLatencyMs / 1000).toFixed(1)} ث` : "—"} detail="دون زمن الشبكة في الهاتف" /><Metric label="تحويلات تلقائية" value={data.fallbacks} detail="بين الموفّرات المجانية" /></View>
+      <Section title="حالة النتائج" subtitle="كل نتيجة محادثة مجمعة بحسب حالتها" />
+      <View style={styles.listCard}>{data.outcomes.length ? data.outcomes.map((item) => <MetricLine key={item.outcome} label={outcomeLabels[item.outcome] ?? item.outcome} value={item.count} />) : <Empty label="لا توجد أحداث تحليلية ضمن هذه الفترة بعد." />}</View>
+      <Section title="الموفّرات الفعلية" subtitle="يعكس النموذج الذي أنهى الرد، وليس مفتاح المستخدم أو محتوى رسالته." />
+      <View style={styles.listCard}>{data.providers.length ? data.providers.map((item) => <MetricLine key={item.provider} label={providerLabels[item.provider] ?? item.provider} value={item.count} detail={item.averageLatencyMs ? `${(item.averageLatencyMs / 1000).toFixed(1)} ث متوسط` : undefined} />) : <Empty label="لا توجد بيانات موفّرين بعد." />}</View>
+      <Section title="النشاط اليومي" subtitle="الطلبات والحسابات النشطة، دون هوية أو محتوى." />
+      <View style={styles.chartCard}>{data.daily.length ? data.daily.map((item) => <View key={item.date} style={styles.dayRow}><View style={styles.barArea}><View style={[styles.bar, { width: `${Math.max(5, (item.requests / maxDaily) * 100)}%` }]} /></View><View style={styles.dayText}><Text style={styles.dayCount}>{item.requests} طلب</Text><Text style={styles.dayDate}>{item.date} · {item.activeAccounts} نشط</Text></View></View>) : <Empty label="سيظهر الرسم بعد أول استخدام فعلي." />}</View>
+    </> : <View style={styles.loading}><Text style={styles.loadingText}>تعذر تحميل التحليلات. أعد المحاولة لاحقاً.</Text></View>}
+  </ScrollView></ScreenContainer>;
+}
+
+function Metric({ label, value, detail }: { label: string; value: string | number; detail: string }) { return <View style={styles.metric}><Text style={styles.metricValue}>{value}</Text><Text style={styles.metricLabel}>{label}</Text><Text style={styles.metricDetail}>{detail}</Text></View>; }
+function Section({ title, subtitle }: { title: string; subtitle: string }) { return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text><Text style={styles.sectionSubtitle}>{subtitle}</Text></View>; }
+function MetricLine({ label, value, detail }: { label: string; value: number; detail?: string }) { return <View style={styles.metricLine}><View style={styles.lineText}><Text style={styles.lineLabel}>{label}</Text>{detail ? <Text style={styles.lineDetail}>{detail}</Text> : null}</View><Text style={styles.lineValue}>{value}</Text></View>; }
+function Empty({ label }: { label: string }) { return <Text style={styles.empty}>{label}</Text>; }
+
+const styles = StyleSheet.create({
+  page: { paddingTop: 10, paddingBottom: 30, gap: 13 }, header: { flexDirection: "row-reverse", alignItems: "center", gap: 10 }, backIcon: { width: 40, height: 40, backgroundColor: "#FFFFFF", borderRadius: 20, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E5E5EA" }, privacy: { flexDirection: "row-reverse", gap: 9, backgroundColor: "#EAF7F1", borderColor: "#C8E9D9", borderWidth: 1, borderRadius: 15, padding: 12 }, privacyText: { flex: 1, color: "#37634E", textAlign: "right", lineHeight: 18, fontSize: 11 }, periods: { flexDirection: "row-reverse", alignSelf: "flex-start", backgroundColor: "#F0F0F3", padding: 3, borderRadius: 12, gap: 3 }, period: { paddingVertical: 8, paddingHorizontal: 13, borderRadius: 9 }, periodActive: { backgroundColor: "#FFFFFF" }, periodText: { color: "#777780", fontWeight: "700", fontSize: 12 }, periodTextActive: { color: "#2563EB" }, metrics: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 9 }, metric: { width: "48%", flexGrow: 1, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E7E7EA", borderRadius: 16, padding: 14, alignItems: "flex-end", minHeight: 106 }, metricValue: { color: "#2563EB", fontSize: 24, fontWeight: "900" }, metricLabel: { color: "#2E2E34", fontSize: 13, fontWeight: "900", marginTop: 4 }, metricDetail: { color: "#80808A", fontSize: 10, marginTop: 3, textAlign: "right" }, section: { alignItems: "flex-end", marginTop: 8, gap: 3 }, sectionTitle: { color: "#2D2D33", fontWeight: "900", fontSize: 15 }, sectionSubtitle: { color: "#84848D", fontSize: 10, textAlign: "right" }, listCard: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E7E7EA", borderRadius: 16, overflow: "hidden" }, metricLine: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", padding: 13, borderBottomWidth: 1, borderBottomColor: "#F0F0F2" }, lineText: { alignItems: "flex-end", gap: 2 }, lineLabel: { color: "#34343B", fontSize: 13, fontWeight: "800" }, lineDetail: { color: "#85858E", fontSize: 10 }, lineValue: { color: "#2563EB", fontSize: 17, fontWeight: "900" }, chartCard: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E7E7EA", borderRadius: 16, padding: 13, gap: 12 }, dayRow: { flexDirection: "row-reverse", alignItems: "center", gap: 12 }, barArea: { flex: 1, height: 10, backgroundColor: "#EEF1F8", borderRadius: 5, overflow: "hidden" }, bar: { height: "100%", borderRadius: 5, backgroundColor: "#5B8DEF" }, dayText: { minWidth: 114, alignItems: "flex-end" }, dayCount: { color: "#32323A", fontSize: 11, fontWeight: "900" }, dayDate: { color: "#8A8A93", fontSize: 9, marginTop: 2 }, empty: { color: "#85858D", fontSize: 12, textAlign: "center", padding: 20, lineHeight: 19 }, loading: { backgroundColor: "#FFFFFF", borderRadius: 16, borderWidth: 1, borderColor: "#E7E7EA", padding: 24 }, loadingText: { color: "#73737C", textAlign: "center", fontSize: 13 }, denied: { flex: 1, justifyContent: "center", alignItems: "center", gap: 10, padding: 30 }, deniedTitle: { color: "#9E1F35", fontSize: 18, fontWeight: "900" }, deniedText: { color: "#73737C", textAlign: "center", fontSize: 13 }, backButton: { backgroundColor: "#F0F0F3", borderRadius: 12, paddingHorizontal: 22, paddingVertical: 11, marginTop: 6 }, backButtonText: { color: "#36363C", fontWeight: "900" },
+});

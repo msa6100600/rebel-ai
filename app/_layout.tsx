@@ -97,6 +97,7 @@ export default function RootLayout() {
               <Stack.Screen name="gpts" />
               <Stack.Screen name="plugins" />
               <Stack.Screen name="keys" />
+              <Stack.Screen name="analytics" />
               <Stack.Screen name="oauth/callback" />
             </Stack>
             <StatusBar style="dark" />

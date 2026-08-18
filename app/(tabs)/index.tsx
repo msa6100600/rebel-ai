@@ -2,7 +2,7 @@ import { File } from "expo-file-system";
 import * as Speech from "expo-speech";
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import { useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
@@ -15,17 +15,36 @@ const getMimeType = () => Platform.OS === "ios" ? "audio/m4a" : "audio/mp4";
 
 export default function ChatScreen() {
   const router = useRouter();
-  const { messages, memories, addMessage, preferences } = useRebelStore();
+  const { messages, addMessage, replaceMessages, preferences } = useRebelStore();
   const [draft, setDraft] = useState("");
   const [voiceNote, setVoiceNote] = useState("");
   const [showTools, setShowTools] = useState(true);
+  const [showKeyOffer, setShowKeyOffer] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
   const chat = trpc.assistant.chat.useMutation();
   const transcription = trpc.voice.transcribe.useMutation();
+  const conversations = trpc.cloud.conversations.list.useQuery();
+  const [activeConversationId, setActiveConversationId] = useState<number | undefined>();
+  const cloudMessages = trpc.cloud.conversations.messages.useQuery({ conversationId: activeConversationId ?? 0 }, { enabled: Boolean(activeConversationId) });
   const selectedVoice = useMemo(() => voiceProfiles.find((voice) => voice.id === preferences.selectedVoiceId) ?? voiceProfiles[0], [preferences.selectedVoiceId]);
   const activeGpt = useMemo(() => rebelGpts.find((gpt) => gpt.id === preferences.selectedGptId) ?? rebelGpts[0], [preferences.selectedGptId]);
   const activeModel = useMemo(() => freeModels.find((model) => model.id === preferences.selectedModel) ?? freeModels[0], [preferences.selectedModel]);
+
+  useEffect(() => {
+    if (!activeConversationId && conversations.data?.[0]) setActiveConversationId(conversations.data[0].id);
+  }, [activeConversationId, conversations.data]);
+
+  useEffect(() => {
+    if (!cloudMessages.data) return;
+    replaceMessages(cloudMessages.data.map((message) => ({
+      id: `cloud_${message.id}`,
+      role: message.role,
+      text: message.content,
+      createdAt: message.createdAt.toISOString(),
+      model: freeModels.some((model) => model.id === message.model) ? message.model as ChatMessage["model"] : undefined,
+    })));
+  }, [cloudMessages.data, replaceMessages]);
 
   const speak = useCallback(async (text: string) => {
     const available = await Speech.getAvailableVoicesAsync().catch(() => []);
@@ -42,14 +61,17 @@ export default function ChatScreen() {
     setVoiceNote("");
     addMessage({ role: "user", text });
     try {
-      const result = await chat.mutateAsync({ message: text, memories: memories.slice(0, 8).map(({ title, content, category }) => ({ title, content, category })), language: selectedVoice.language, model: preferences.selectedModel, gptId: activeGpt.id });
+      const result = await chat.mutateAsync({ message: text, conversationId: activeConversationId, memories: [], language: selectedVoice.language, model: preferences.selectedModel, gptId: activeGpt.id });
       addMessage({ role: "assistant", text: result.answer, insight: result.insight, confidence: result.confidence, model: result.model });
+      if ("keyOfferEligible" in result && result.keyOfferEligible) setShowKeyOffer(true);
+      setActiveConversationId(result.conversationId);
+      conversations.refetch();
       haptic.success();
     } catch {
       addMessage({ role: "assistant", text: "تعذر إتمام التحليل الآن. لم يتم حفظ أي معلومة. أعد المحاولة بعد التحقق من الاتصال.", isError: true });
       haptic.warning();
     }
-  }, [activeGpt.id, addMessage, chat, draft, memories, preferences.selectedModel, selectedVoice.language]);
+  }, [activeConversationId, activeGpt.id, addMessage, chat, conversations, draft, preferences.selectedModel, selectedVoice.language]);
 
   const toggleRecording = useCallback(async () => {
     if (Platform.OS === "web") { setVoiceNote("التسجيل الصوتي يُختبر من تطبيق Android المثبت. يمكنك المتابعة بالكتابة هنا."); return; }
@@ -81,6 +103,7 @@ export default function ChatScreen() {
   return <ScreenContainer className="px-4" containerClassName="bg-background" safeAreaClassName="bg-background"><KeyboardAvoidingView style={styles.page} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={8}>
     <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="فتح Rebel GPTs" onPress={() => router.push("/gpts" as never)} style={({ pressed }) => [styles.headerIcon, pressed && styles.pressed]}><IconSymbol name="square.grid.2x2.fill" size={22} color="#161618" /></Pressable><Pressable accessibilityRole="button" accessibilityLabel="اختيار النموذج" onPress={() => router.push("/providers" as never)} style={({ pressed }) => [styles.gptPicker, pressed && styles.pressed]}><Text style={styles.gptPickerText}>{activeModel.shortName}</Text><Text style={styles.gptPickerArrow}>⌄</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="فتح Rebal Live" onPress={() => router.push("/call" as never)} style={({ pressed }) => [styles.liveRound, pressed && styles.pressed]}><IconSymbol name="mic.fill" size={20} color="#2563EB" /></Pressable></View>
     <View style={styles.messageArea}><FlatList data={messages} renderItem={renderMessage} keyExtractor={(item) => item.id} contentContainerStyle={styles.messageList} showsVerticalScrollIndicator={false} ListFooterComponent={chat.isPending ? <View style={styles.thinking}><ActivityIndicator color="#2563EB" size="small" /><Text style={styles.thinkingText}>أرتّب السياق والأدلة…</Text></View> : null} /></View>
+    {showKeyOffer ? <View style={styles.composer}><IconSymbol name="key.fill" size={20} color="#2563EB" /><View style={styles.toolShelf}><Text style={styles.toolText}>استخدم مفتاحك الشخصي</Text><Text style={styles.thinkingText}>اختياري للمستخدم المتقدم. يُختبر المفتاح أولاً، ويُحفظ مشفّراً للحساب نفسه فقط، ويمكن حذفه في أي وقت.</Text></View><Pressable accessibilityRole="button" accessibilityLabel="فتح إعدادات المفتاح الشخصي" onPress={() => { setShowKeyOffer(false); router.push("/keys" as never); }} style={({ pressed }) => [styles.gptPicker, pressed && styles.pressed]}><Text style={styles.gptPickerText}>إضافة</Text><IconSymbol name="chevron.right" size={16} color="#2563EB" /></Pressable></View> : null}
     {voiceNote ? <Text style={styles.voiceNote}>{voiceNote}</Text> : null}
     {showTools ? <View style={styles.toolShelf}><Pressable onPress={() => Alert.alert("إنشاء صورة", "اكتب وصف الصورة في مربع المحادثة، ثم اختر خدمة الصور عند ربطها من المكونات الإضافية.")} style={styles.toolAction}><IconSymbol name="photo.fill" size={21} color="#52525B" /><Text style={styles.toolText}>أنشئ صورة</Text></Pressable><Pressable onPress={() => setDraft("ساعدني في كتابة: ")} style={styles.toolAction}><IconSymbol name="pencil" size={21} color="#52525B" /><Text style={styles.toolText}>الكتابة والتحرير</Text></Pressable><Pressable onPress={() => setDraft("ابحث في الويب عن: ")} style={styles.toolAction}><IconSymbol name="globe" size={21} color="#52525B" /><Text style={styles.toolText}>ابحث في الويب</Text></Pressable><Pressable onPress={() => router.push("/plugins" as never)} style={styles.toolAction}><IconSymbol name="puzzlepiece.extension.fill" size={21} color="#52525B" /><Text style={styles.toolText}>المكونات الإضافية</Text></Pressable></View> : null}
     <View style={styles.composer}><Pressable accessibilityRole="button" accessibilityLabel="إظهار أو إخفاء أدوات الإدخال" onPress={() => setShowTools((value) => !value)} style={({ pressed }) => [styles.plusButton, pressed && styles.pressed]}><IconSymbol name="plus.circle.fill" size={28} color="#232326" /></Pressable><TextInput accessibilityLabel="اكتب رسالتك إلى Rebel AI" value={draft} onChangeText={setDraft} onSubmitEditing={() => sendMessage()} placeholder={`اسأل ${activeGpt.name}`} placeholderTextColor="#8B8B95" multiline returnKeyType="send" style={styles.input} /><Pressable accessibilityRole="button" accessibilityLabel={recorderState.isRecording ? "إيقاف التسجيل" : "تسجيل رسالة صوتية"} onPress={toggleRecording} disabled={transcription.isPending || chat.isPending} style={({ pressed }) => [styles.composerIcon, recorderState.isRecording && styles.recording, pressed && styles.pressed]}><IconSymbol name="mic.fill" size={22} color={recorderState.isRecording ? "#FFFFFF" : "#202025"} /></Pressable><Pressable accessibilityRole="button" accessibilityLabel="إرسال" onPress={() => sendMessage()} disabled={!draft.trim() || chat.isPending} style={({ pressed }) => [styles.sendButton, (!draft.trim() || chat.isPending) && styles.sendDisabled, pressed && styles.pressed]}><IconSymbol name="arrow.up.circle.fill" size={29} color="#FFFFFF" /></Pressable></View>

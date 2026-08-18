@@ -19,10 +19,12 @@ const OWNER_USERNAME = "rebelai";
 const OWNER_LEGACY_LOGIN_USERNAME = "rebel ai";
 const FREE_DAILY_MESSAGE_LIMIT = 20;
 const PERSONAL_KEY_DAILY_MESSAGE_LIMIT = 150;
+const FREE_RATE_LIMIT_PER_MINUTE = Math.max(1, Math.min(30, Number.parseInt(process.env.REBEL_RATE_LIMIT_PER_MINUTE ?? "5", 10) || 5));
 const usernameSchema = z.string().trim().min(3).max(32).regex(/^[a-zA-Z0-9._-]+$/, "استخدم حروفاً إنجليزية أو أرقاماً أو . أو _ أو - فقط.");
 const accountInputSchema = z.object({ username: usernameSchema, password: z.string().min(8).max(128) });
 const loginInputSchema = z.object({ identity: z.string().trim().min(3).max(320), password: z.string().min(8).max(128) });
 const usageDate = () => new Date().toISOString().slice(0, 10);
+const rateWindowKey = () => Math.floor(Date.now() / 60_000).toString();
 const normalizeUsername = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, "");
 const normalizeEmail = (value: string) => value.trim().toLocaleLowerCase();
 const modelForProvider: Record<FreeProvider, FreeModel> = { gemini: "gemini-3.6-flash", groq: "qwen/qwen3.6-27b", mistral: "mistral-small-latest" };
@@ -86,15 +88,28 @@ export const appRouter = router({
         await db.updateRebelLastLogin(account.id);
         return { token: createRebelSession({ accountId: account.id, username: account.username, displayName: account.displayName, role: account.role }), account: publicAccount(account) };
       }),
+    deleteAccount: publicProcedure
+      .input(z.object({ password: z.string().min(8).max(128), confirmation: z.literal("DELETE") }))
+      .mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        if (!(await verifyPassword(input.password, account.passwordHash))) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "كلمة المرور غير صحيحة؛ لم يُحذف الحساب." });
+        }
+        await db.deleteRebelAccountAndData(account.id);
+        return { deleted: true as const };
+      }),
     me: publicProcedure.query(async ({ ctx }) => {
       const account = await requireRebelAccount(ctx.req);
       const usage = await db.getFreeUsage(account.id, usageDate(), FREE_DAILY_MESSAGE_LIMIT);
-      return { account: publicAccount(account), usage };
+      const rate = await db.getRebelRateUsage(account.id, rateWindowKey(), FREE_RATE_LIMIT_PER_MINUTE);
+      return { account: publicAccount(account), usage, rate };
     }),
     usage: publicProcedure.input(z.object({ provider: z.enum(["gemini", "groq", "mistral"]).optional() }).optional()).query(async ({ ctx, input }) => {
       const account = await requireRebelAccount(ctx.req);
       const storedKey = input?.provider ? await db.getRebelProviderKey(account.id, input.provider) : undefined;
-      return db.getFreeUsage(account.id, usageDate(), storedKey ? PERSONAL_KEY_DAILY_MESSAGE_LIMIT : FREE_DAILY_MESSAGE_LIMIT);
+      const usage = await db.getFreeUsage(account.id, usageDate(), storedKey ? PERSONAL_KEY_DAILY_MESSAGE_LIMIT : FREE_DAILY_MESSAGE_LIMIT);
+      const rate = await db.getRebelRateUsage(account.id, rateWindowKey(), FREE_RATE_LIMIT_PER_MINUTE);
+      return { ...usage, rate };
     }),
     providerKeyStatuses: publicProcedure.query(async ({ ctx }) => {
       const account = await requireRebelAccount(ctx.req);
@@ -122,17 +137,77 @@ export const appRouter = router({
         return { deleted: true as const };
       }),
   }),
+  cloud: router({
+    conversations: router({
+      list: publicProcedure.query(async ({ ctx }) => {
+        const account = await requireRebelAccount(ctx.req);
+        return db.listCloudConversations(account.id);
+      }),
+      create: publicProcedure.input(z.object({ title: z.string().trim().min(1).max(160) })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        return db.createCloudConversation(account.id, input.title);
+      }),
+      messages: publicProcedure.input(z.object({ conversationId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        const conversation = await db.getCloudConversation(account.id, input.conversationId);
+        if (!conversation) throw new TRPCError({ code: "NOT_FOUND", message: "المحادثة غير متاحة لهذا الحساب." });
+        return db.listCloudMessages(account.id, input.conversationId);
+      }),
+    }),
+    memories: router({
+      list: publicProcedure.input(z.object({ search: z.string().trim().max(180).optional() }).optional()).query(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        return db.listCloudMemories(account.id, input?.search);
+      }),
+      create: publicProcedure.input(z.object({
+        category: z.enum(["profile", "preference", "goal", "project", "decision", "temporary"]),
+        title: z.string().trim().min(1).max(180),
+        content: z.string().trim().min(1).max(1000),
+        sourceConversationId: z.number().int().positive().optional(),
+      })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        return db.createCloudMemory({ accountId: account.id, ...input });
+      }),
+      delete: publicProcedure.input(z.object({ memoryId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        await db.deleteCloudMemory(account.id, input.memoryId);
+        return { deleted: true as const };
+      }),
+    }),
+  }),
   assistant: router({
     chat: publicProcedure
       .input(z.object({
         message: z.string().trim().min(1).max(3500),
         memories: z.array(memorySchema).max(10).default([]),
+        conversationId: z.number().int().positive().optional(),
         language: z.string().max(16).default("ar-SA"),
         model: z.enum(FREE_MODELS).default("gemini-3.6-flash"),
         gptId: z.enum(["rebel-core", "health-guide", "legal-guide", "life-coach", "code-studio", "study-partner", "travel-planner"]).default("rebel-core"),
       }))
       .mutation(async ({ ctx, input }) => {
         const account = await requireRebelAccount(ctx.req);
+        const startedAt = Date.now();
+        const conversation = input.conversationId ? await db.getCloudConversation(account.id, input.conversationId) : await db.createCloudConversation(account.id, input.message.slice(0, 80));
+        if (!conversation) throw new TRPCError({ code: "NOT_FOUND", message: "المحادثة غير متاحة لهذا الحساب." });
+        await db.appendCloudMessage({ accountId: account.id, conversationId: conversation.id, role: "user", content: input.message });
+        const finalize = async <T extends { answer: string; model: FreeModel; status: "ok" | "daily_limit" | "rate_limited" | "provider_error" | "fallback_error"; analyticsFallbackUsed?: boolean }>(response: T) => {
+          await db.appendCloudMessage({ accountId: account.id, conversationId: conversation.id, role: "assistant", content: response.answer, model: response.model });
+          const { analyticsFallbackUsed, ...publicResponse } = response;
+          try {
+            await db.recordRebelAnalyticsEvent({
+              accountId: account.id,
+              provider: freeProviderMetadata[publicResponse.model].provider,
+              model: publicResponse.model,
+              outcome: publicResponse.status,
+              fallbackUsed: analyticsFallbackUsed,
+              latencyMs: Date.now() - startedAt,
+            });
+          } catch (analyticsError) {
+            console.error("[Analytics] Failed to record aggregated event", analyticsError);
+          }
+          return { ...publicResponse, conversationId: conversation.id };
+        };
         const selectedProvider = freeProviderMetadata[input.model as FreeModel].provider;
         const storedKey = await db.getRebelProviderKey(account.id, selectedProvider);
         let providerKeys: ProviderKeyOverrides | undefined;
@@ -143,11 +218,18 @@ export const appRouter = router({
             throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "تعذر استخدام مفتاحك الشخصي المحفوظ. احذفه وأضفه من جديد." });
           }
         }
+        const rate = await db.reserveRebelRateRequest(account.id, rateWindowKey(), FREE_RATE_LIMIT_PER_MINUTE);
+        if (!rate.allowed) {
+          const retryAfterSeconds = Math.max(1, 60 - new Date().getSeconds());
+          const usage = await db.getFreeUsage(account.id, usageDate(), providerKeys ? PERSONAL_KEY_DAILY_MESSAGE_LIMIT : FREE_DAILY_MESSAGE_LIMIT);
+          return finalize({ answer: `Rebel يستقبل رسائل كثيرة بسرعة الآن. انتظر نحو ${retryAfterSeconds} ثانية ثم أعد المحاولة.`, insight: `الحد الحالي هو ${rate.limit} رسائل في الدقيقة لكل حساب لحماية الخدمة المجانية.`, confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage, rate: { ...rate, retryAfterSeconds } });
+        }
         const quota = providerKeys ? PERSONAL_KEY_DAILY_MESSAGE_LIMIT : FREE_DAILY_MESSAGE_LIMIT;
         const usage = await db.reserveFreeMessage(account.id, usageDate(), quota);
-        if (!usage.allowed) return { answer: `وصلت إلى حدك اليومي الحالي (${usage.limit} رسالة). جرّب غداً أو أضف مفتاحك الشخصي من الإعدادات.`, insight: "الحصة مستقلة لكل حساب ولا يوجد بديل مدفوع تلقائي.", confidence: 0, suggestedMemory: null, status: "daily_limit" as const, model: input.model, usage };
-        const memoryContext = input.memories.length
-          ? input.memories.map((memory) => `- ${memory.category}: ${memory.title} — ${memory.content}`).join("\n")
+        if (!usage.allowed) return finalize({ answer: `وصلت إلى حدك اليومي الحالي (${usage.limit} رسالة). جرّب غداً أو أضف مفتاحك الشخصي من الإعدادات.`, insight: "الحصة مستقلة لكل حساب ولا يوجد بديل مدفوع تلقائي.", confidence: 0, suggestedMemory: null, status: "daily_limit" as const, model: input.model, usage, keyOfferEligible: !providerKeys });
+        const cloudMemories = await db.listCloudMemories(account.id, input.message);
+        const memoryContext = cloudMemories.length
+          ? cloudMemories.slice(0, 10).map((memory) => `- ${memory.category}: ${memory.title} — ${memory.content}`).join("\n")
           : "لا توجد ذاكرة محفوظة مرتبطة مباشرة بهذا الحوار.";
 
         try {
@@ -161,7 +243,7 @@ export const appRouter = router({
                 content: `اللغة المفضلة: ${input.language}\nالذاكرة المتاحة:\n${memoryContext}\n\nطلب المستخدم:\n${input.message}`,
               },
             ], providerKeys);
-          return {
+          return finalize({
             answer: result.answer,
             insight: result.fallbackUsed ? `استمر الرد عبر ${freeProviderMetadata[result.model].label} بعد بلوغ حد مؤقت لنموذج مجاني آخر.` : "الرد مولّد للمساعدة في التفكير؛ راجع المصادر قبل اعتماد المعلومات المهمة.",
             confidence: 70,
@@ -169,21 +251,23 @@ export const appRouter = router({
             status: "ok" as const,
             model: result.model,
             usage,
-          };
+            rate,
+            analyticsFallbackUsed: result.fallbackUsed,
+          });
         } catch (error) {
           if (error instanceof AllFreeProvidersRateLimitedError) {
-            return { answer: "الخدمة تعمل عبر نماذج مجانية وقد وصلت جميعها إلى حد الاستخدام المؤقت أو اليومي الآن. جرّب مرة أخرى بعد قليل.", insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage };
+            return finalize({ answer: "الخدمة تعمل عبر نماذج مجانية وقد وصلت جميعها إلى حد الاستخدام المؤقت أو اليومي الآن. جرّب مرة أخرى بعد قليل.", insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage, keyOfferEligible: !providerKeys });
           }
           if (error instanceof FreeProviderError) {
             const provider = freeProviderMetadata[input.model as FreeModel];
             if (error.kind === "rate_limit") {
               const wait = error.retryAfterSeconds ? ` حاول مجدداً بعد نحو ${error.retryAfterSeconds} ثانية.` : " انتظر قليلاً ثم أعد المحاولة.";
-              return { answer: `وصلت إلى حد الاستخدام المجاني لـ ${provider.label}.${wait}`, insight: "لم تُرسل هذه المحاولة إلى نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage };
+              return finalize({ answer: `وصلت إلى حد الاستخدام المجاني لـ ${provider.label}.${wait}`, insight: "لم تُرسل هذه المحاولة إلى نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage });
             }
-            if (error.kind === "authentication") return { answer: `تعذر تفويض ${provider.label}. تحقق من مفتاح API المجاني لهذا الموفّر.`, insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage };
-            return { answer: `خدمة ${provider.label} غير متاحة الآن. أعد المحاولة لاحقاً أو اختر نموذجاً مجانياً آخر.`, insight: "لم يُستخدم أي نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage };
+            if (error.kind === "authentication") return finalize({ answer: `تعذر تفويض ${provider.label}. تحقق من مفتاح API المجاني لهذا الموفّر.`, insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage });
+            return finalize({ answer: `خدمة ${provider.label} غير متاحة الآن. أعد المحاولة لاحقاً أو اختر نموذجاً مجانياً آخر.`, insight: "لم يُستخدم أي نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage });
           }
-          return { ...fallbackReply(input.message), usage };
+          return finalize({ ...fallbackReply(input.message), usage });
         }
       }),
   }),
@@ -206,6 +290,13 @@ export const appRouter = router({
       }),
   }),
   owner: router({
+    analytics: publicProcedure
+      .input(z.object({ days: z.number().int().min(1).max(30).default(7) }).optional())
+      .query(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        if (account.role !== "owner") throw new TRPCError({ code: "FORBIDDEN", message: "لوحة التحليلات متاحة لحساب المالك فقط." });
+        return db.getOwnerAnalytics(input?.days ?? 7);
+      }),
     login: publicProcedure
       .input(z.object({ username: z.string().trim().min(1).max(64), password: z.string().min(1).max(256) }))
       .mutation(({ input }) => {
