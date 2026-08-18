@@ -16,9 +16,15 @@ describe("owner console gate", () => {
     expect(result.granted).toBe(false);
   });
 
-  it("accepts the configured owner username and password together", async () => {
+  it("accepts the Rebel Ai username and configured password together", async () => {
+    const caller = appRouter.createCaller({} as never);
+    const result = await caller.owner.login({ username: "Rebel Ai", password: process.env.OWNER_CONSOLE_PASSWORD! });
+    expect(result.granted).toBe(true);
+  });
+
+  it("rejects the retired owner username", async () => {
     const caller = appRouter.createCaller({} as never);
     const result = await caller.owner.login({ username: "rebal ai owner", password: process.env.OWNER_CONSOLE_PASSWORD! });
-    expect(result.granted).toBe(true);
+    expect(result.granted).toBe(false);
   });
 });

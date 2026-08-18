@@ -11,7 +11,7 @@ const memorySchema = z.object({
   content: z.string().max(500),
   category: z.enum(["تفضيل", "حقيقة", "سياق", "استنتاج"]),
 });
-const OWNER_USERNAME = "rebal ai owner";
+const OWNER_USERNAME = "rebel ai";
 const GPT_INSTRUCTIONS = {
   "rebel-core": "حلل الطلب بوضوح وبمنظور عام متوازن.",
   "health-guide": "قدّم معلومات صحية عامة وتعليمية فقط. لا تشخّص ولا تصف علاجاً شخصياً، واذكر متى يجب مراجعة طبيب أو الطوارئ.",

@@ -119,7 +119,8 @@ type RebelState = {
   clearMemories: () => void;
 };
 
-const STORAGE_KEY = "rebel-ai-state-v1";
+const STORAGE_KEY = "rebel-ai-state-v2";
+const RETIRED_STORAGE_KEYS = ["rebel-ai-state-v1"];
 
 const defaultSources: SourceItem[] = [
   { id: "s1", title: "المصدر العلمي", domain: "journals / universities", status: "موثوق", score: 91, note: "يحتاج مراجعة تاريخ النشر والمنهجية." },
@@ -162,7 +163,9 @@ export function RebelStoreProvider({ children }: { children: ReactNode }) {
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences);
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY)
+    AsyncStorage.multiRemove(RETIRED_STORAGE_KEYS)
+      .catch(() => undefined)
+      .then(() => AsyncStorage.getItem(STORAGE_KEY))
       .then((raw) => {
         if (!raw) return;
         const parsed = JSON.parse(raw) as Partial<Pick<RebelState, "messages" | "memories" | "approvals" | "ownerRequests" | "preferences">>;

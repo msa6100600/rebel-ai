@@ -2,7 +2,8 @@ import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
 import { Platform } from "react-native";
 
-const OWNER_SESSION_KEY = "rebel-ai-owner-session";
+const OWNER_SESSION_KEY = "rebel-ai-owner-session-v2";
+const RETIRED_OWNER_SESSION_KEY = "rebel-ai-owner-session";
 
 async function setStorage(value: string) {
   if (Platform.OS === "web") {
@@ -13,7 +14,11 @@ async function setStorage(value: string) {
 }
 
 async function getStorage() {
-  if (Platform.OS === "web") return window.sessionStorage.getItem(OWNER_SESSION_KEY);
+  if (Platform.OS === "web") {
+    window.sessionStorage.removeItem(RETIRED_OWNER_SESSION_KEY);
+    return window.sessionStorage.getItem(OWNER_SESSION_KEY);
+  }
+  await SecureStore.deleteItemAsync(RETIRED_OWNER_SESSION_KEY).catch(() => undefined);
   return SecureStore.getItemAsync(OWNER_SESSION_KEY);
 }
 
