@@ -49,6 +49,26 @@ export type VoiceProfile = {
   rate: number;
 };
 
+export type RebelGptProfile = {
+  id: "rebel-core" | "health-guide" | "legal-guide" | "life-coach" | "code-studio" | "study-partner" | "travel-planner";
+  name: string;
+  shortName: string;
+  description: string;
+  category: string;
+  icon: "sparkles" | "medical" | "gavel" | "favorite" | "code" | "school" | "airplane";
+  color: string;
+};
+
+export const rebelGpts: RebelGptProfile[] = [
+  { id: "rebel-core", name: "Rebel AI", shortName: "Rebel", description: "مساعدك العام للتحليل والكتابة وربط الأفكار.", category: "عام", icon: "sparkles", color: "#2563EB" },
+  { id: "health-guide", name: "الدليل الصحي", shortName: "صحة", description: "يفسّر المعلومات الصحية العامة ويساعدك على تجهيز أسئلتك للطبيب.", category: "صحة عامة", icon: "medical", color: "#0F8B72" },
+  { id: "legal-guide", name: "الدليل القانوني", shortName: "قانون", description: "ينظم المفاهيم القانونية العامة ولا يقدم بديلاً عن محامٍ مرخّص.", category: "معلومات عامة", icon: "gavel", color: "#7C4DFF" },
+  { id: "life-coach", name: "مدرب الحياة", shortName: "توازن", description: "يساعدك على تحديد هدف وخطوة صغيرة ومتابعة عملية.", category: "تطوير شخصي", icon: "favorite", color: "#D05A7B" },
+  { id: "code-studio", name: "Rebel Code", shortName: "برمجة", description: "شريك للبرمجة والتصميم والتخطيط الفني خطوة بخطوة.", category: "تقنية", icon: "code", color: "#2475C6" },
+  { id: "study-partner", name: "شريك التعلّم", shortName: "تعلّم", description: "يشرح الدروس ويصنع خطة مذاكرة وأسئلة تدريبية.", category: "تعليم", icon: "school", color: "#B66B12" },
+  { id: "travel-planner", name: "مخطط الرحلات", shortName: "سفر", description: "ينظم أفكار الرحلة والميزانية وقائمة الاستعداد.", category: "تخطيط", icon: "airplane", color: "#167C9A" },
+];
+
 export const voiceProfiles: VoiceProfile[] = [
   { id: "lina", name: "لينا", gender: "صوت نسائي", language: "ar-SA", dialect: "العربية الفصحى", pitch: 1.1, rate: 0.94 },
   { id: "nour", name: "نور", gender: "صوت نسائي", language: "ar-EG", dialect: "المصرية", pitch: 1.14, rate: 0.98 },
@@ -67,6 +87,7 @@ export type Preferences = {
   preferredLanguage: string;
   selectedProvider: string;
   selectedModel: string;
+  selectedGptId: RebelGptProfile["id"];
   allowSuggestedLearning: boolean;
   hapticsEnabled: boolean;
 };
@@ -122,6 +143,7 @@ const defaultPreferences: Preferences = {
   preferredLanguage: "ar-SA",
   selectedProvider: "rebel-core",
   selectedModel: "gpt-5",
+  selectedGptId: "rebel-core",
   allowSuggestedLearning: true,
   hapticsEnabled: true,
 };

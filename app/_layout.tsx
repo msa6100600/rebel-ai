@@ -92,9 +92,11 @@ export default function RootLayout() {
               <Stack.Screen name="login" />
               <Stack.Screen name="providers" />
               <Stack.Screen name="call" />
+              <Stack.Screen name="gpts" />
+              <Stack.Screen name="plugins" />
               <Stack.Screen name="oauth/callback" />
             </Stack>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
           </QueryClientProvider>
         </trpc.Provider>
       </RebelStoreProvider>

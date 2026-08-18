@@ -15,7 +15,7 @@ const getMimeType = () => Platform.OS === "ios" ? "audio/m4a" : "audio/mp4";
 
 export default function CallScreen() {
   const router = useRouter();
-  const { preferences, memories, addMessage, addApproval } = useRebelStore();
+  const { preferences, memories, addMessage } = useRebelStore();
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
   const chat = trpc.assistant.chat.useMutation();
@@ -77,9 +77,8 @@ export default function CallScreen() {
       if (!transcriptionResult.ok || !transcriptionResult.text) throw new Error("empty transcription");
       setLastHeard(transcriptionResult.text);
       addMessage({ role: "user", text: transcriptionResult.text });
-      const result = await chat.mutateAsync({ message: transcriptionResult.text, memories: memories.slice(0, 8).map(({ title, content, category }) => ({ title, content, category })), language: selectedVoice.language, model: preferences.selectedModel as "gpt-5" | "gpt-5-mini" | "claude-sonnet-4-6" | "gemini-3.1-pro-preview" });
+      const result = await chat.mutateAsync({ message: transcriptionResult.text, memories: memories.slice(0, 8).map(({ title, content, category }) => ({ title, content, category })), language: selectedVoice.language, model: preferences.selectedModel as "gpt-5" | "gpt-5-mini" | "claude-sonnet-4-6" | "gemini-3.1-pro-preview", gptId: preferences.selectedGptId });
       addMessage({ role: "assistant", text: result.answer, insight: result.insight, confidence: result.confidence });
-      if (result.suggestedMemory && preferences.allowSuggestedLearning) addApproval({ title: `حفظ معرفة مقترحة: ${result.suggestedMemory.title}`, detail: result.suggestedMemory.content, type: "تعلم مقترح", memory: result.suggestedMemory });
       setLastAnswer(result.answer);
       haptic.success();
       await speakAnswer(result.answer);
