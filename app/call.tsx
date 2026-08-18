@@ -77,7 +77,7 @@ export default function CallScreen() {
       if (!transcriptionResult.ok || !transcriptionResult.text) throw new Error("empty transcription");
       setLastHeard(transcriptionResult.text);
       addMessage({ role: "user", text: transcriptionResult.text });
-      const result = await chat.mutateAsync({ message: transcriptionResult.text, memories: memories.slice(0, 8).map(({ title, content, category }) => ({ title, content, category })), language: selectedVoice.language, model: preferences.selectedModel as "gpt-5" | "gpt-5-mini" | "claude-sonnet-4-6" | "gemini-3.1-pro-preview", gptId: preferences.selectedGptId });
+      const result = await chat.mutateAsync({ message: transcriptionResult.text, memories: memories.slice(0, 8).map(({ title, content, category }) => ({ title, content, category })), language: selectedVoice.language, model: preferences.selectedModel, gptId: preferences.selectedGptId });
       addMessage({ role: "assistant", text: result.answer, insight: result.insight, confidence: result.confidence });
       setLastAnswer(result.answer);
       haptic.success();

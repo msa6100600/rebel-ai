@@ -9,6 +9,7 @@ export type ChatMessage = {
   insight?: string;
   confidence?: number;
   isError?: boolean;
+  model?: FreeModelId;
 };
 
 export type MemoryItem = {
@@ -49,6 +50,14 @@ export type VoiceProfile = {
   rate: number;
 };
 
+export type FreeModelId = "gemini-3.6-flash" | "qwen/qwen3.6-27b" | "mistral-small-latest";
+
+export const freeModels: Array<{ id: FreeModelId; provider: "gemini" | "groq" | "mistral"; name: string; shortName: string; description: string }> = [
+  { id: "gemini-3.6-flash", provider: "gemini", name: "Gemini 3.6 Flash", shortName: "Gemini Flash", description: "الخيار الافتراضي السريع المتاح حالياً للمحادثة العربية والتحليل اليومي." },
+  { id: "qwen/qwen3.6-27b", provider: "groq", name: "Qwen 3.6 · Groq", shortName: "Qwen · Groq", description: "نموذج متاح على Groq للاستجابات السريعة والتحليل النصي." },
+  { id: "mistral-small-latest", provider: "mistral", name: "Mistral Small", shortName: "Mistral Small", description: "نموذج صغير متوازن للكتابة والشرح والتحليل." },
+];
+
 export type RebelGptProfile = {
   id: "rebel-core" | "health-guide" | "legal-guide" | "life-coach" | "code-studio" | "study-partner" | "travel-planner";
   name: string;
@@ -85,8 +94,8 @@ export const voiceProfiles: VoiceProfile[] = [
 export type Preferences = {
   selectedVoiceId: string;
   preferredLanguage: string;
-  selectedProvider: string;
-  selectedModel: string;
+  selectedProvider: "gemini" | "groq" | "mistral";
+  selectedModel: FreeModelId;
   selectedGptId: RebelGptProfile["id"];
   allowSuggestedLearning: boolean;
   hapticsEnabled: boolean;
@@ -119,8 +128,8 @@ type RebelState = {
   clearMemories: () => void;
 };
 
-const STORAGE_KEY = "rebel-ai-state-v2";
-const RETIRED_STORAGE_KEYS = ["rebel-ai-state-v1"];
+const STORAGE_KEY = "rebel-ai-state-v3";
+const RETIRED_STORAGE_KEYS = ["rebel-ai-state-v1", "rebel-ai-state-v2"];
 
 const defaultSources: SourceItem[] = [
   { id: "s1", title: "المصدر العلمي", domain: "journals / universities", status: "موثوق", score: 91, note: "يحتاج مراجعة تاريخ النشر والمنهجية." },
@@ -142,8 +151,8 @@ const starterMessages: ChatMessage[] = [
 const defaultPreferences: Preferences = {
   selectedVoiceId: "lina",
   preferredLanguage: "ar-SA",
-  selectedProvider: "rebel-core",
-  selectedModel: "gpt-5",
+  selectedProvider: "gemini",
+  selectedModel: "gemini-3.6-flash",
   selectedGptId: "rebel-core",
   allowSuggestedLearning: true,
   hapticsEnabled: true,
@@ -173,7 +182,11 @@ export function RebelStoreProvider({ children }: { children: ReactNode }) {
         if (parsed.memories) setMemories(parsed.memories);
         if (parsed.approvals) setApprovals(parsed.approvals);
         if (parsed.ownerRequests) setOwnerRequests(parsed.ownerRequests);
-        if (parsed.preferences) setPreferences({ ...defaultPreferences, ...parsed.preferences });
+        if (parsed.preferences) {
+          const candidate = parsed.preferences as Partial<Preferences>;
+          const model = freeModels.find((item) => item.id === candidate.selectedModel);
+          setPreferences({ ...defaultPreferences, ...candidate, selectedModel: model?.id ?? defaultPreferences.selectedModel, selectedProvider: model?.provider ?? defaultPreferences.selectedProvider });
+        }
       })
       .catch(() => undefined)
       .finally(() => setHydrated(true));
