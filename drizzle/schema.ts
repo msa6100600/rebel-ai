@@ -1,4 +1,4 @@
-import { index, int, mysqlEnum, mysqlTable, text, timestamp, unique, varchar } from "drizzle-orm/mysql-core";
+import { boolean, index, int, mysqlEnum, mysqlTable, text, timestamp, unique, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -56,9 +56,28 @@ export const rebelProviderKeys = mysqlTable("rebel_provider_keys", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (table) => [unique("rebel_key_account_provider_unique").on(table.accountId, table.provider)]);
 
+export const rebelProjects = mysqlTable("rebel_projects", {
+  id: int("id").autoincrement().primaryKey(),
+  accountId: int("accountId").notNull(),
+  name: varchar("name", { length: 120 }).notNull(),
+  description: text("description"),
+  instructions: text("instructions"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => [index("rebel_project_account_updated_idx").on(table.accountId, table.updatedAt)]);
+
+export const rebelMemorySettings = mysqlTable("rebel_memory_settings", {
+  id: int("id").autoincrement().primaryKey(),
+  accountId: int("accountId").notNull(),
+  enabled: boolean("enabled").default(true).notNull(),
+  autoSaveAllowed: boolean("autoSaveAllowed").default(false).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => [unique("rebel_memory_settings_account_unique").on(table.accountId)]);
+
 export const rebelConversations = mysqlTable("rebel_conversations", {
   id: int("id").autoincrement().primaryKey(),
   accountId: int("accountId").notNull(),
+  projectId: int("projectId"),
   title: varchar("title", { length: 160 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -77,14 +96,17 @@ export const rebelConversationMessages = mysqlTable("rebel_conversation_messages
 export const rebelMemoryItems = mysqlTable("rebel_memory_items", {
   id: int("id").autoincrement().primaryKey(),
   accountId: int("accountId").notNull(),
+  projectId: int("projectId"),
   category: mysqlEnum("category", ["profile", "preference", "goal", "project", "decision", "temporary"]).notNull(),
   title: varchar("title", { length: 180 }).notNull(),
   content: text("content").notNull(),
+  importance: int("importance").default(50).notNull(),
+  expiresAt: timestamp("expiresAt"),
   sourceConversationId: int("sourceConversationId"),
   approvedAt: timestamp("approvedAt").defaultNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => [index("rebel_memory_account_category_idx").on(table.accountId, table.category), index("rebel_memory_account_updated_idx").on(table.accountId, table.updatedAt)]);
+}, (table) => [index("rebel_memory_account_category_idx").on(table.accountId, table.category), index("rebel_memory_account_project_idx").on(table.accountId, table.projectId), index("rebel_memory_account_updated_idx").on(table.accountId, table.updatedAt)]);
 
 export const rebelRateWindows = mysqlTable("rebel_rate_windows", {
   id: int("id").autoincrement().primaryKey(),
@@ -108,3 +130,4 @@ export const rebelAnalyticsEvents = mysqlTable("rebel_analytics_events", {
 export type RebelAccount = typeof rebelAccounts.$inferSelect;
 export type RebelProvider = "gemini" | "groq" | "mistral";
 export type RebelMemoryCategory = "profile" | "preference" | "goal" | "project" | "decision" | "temporary";
+export type RebelProject = typeof rebelProjects.$inferSelect;

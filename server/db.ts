@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gte, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, rebelAccounts, rebelAnalyticsEvents, rebelConversationMessages, rebelConversations, rebelDailyUsage, rebelMemoryItems, rebelProviderKeys, rebelRateWindows, type RebelMemoryCategory, type RebelProvider, users } from "../drizzle/schema";
+import { InsertUser, rebelAccounts, rebelAnalyticsEvents, rebelConversationMessages, rebelConversations, rebelDailyUsage, rebelMemoryItems, rebelMemorySettings, rebelProjects, rebelProviderKeys, rebelRateWindows, type RebelMemoryCategory, type RebelProvider, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -210,11 +210,69 @@ export async function deleteRebelProviderKey(accountId: number, provider: RebelP
   await db.delete(rebelProviderKeys).where(and(eq(rebelProviderKeys.accountId, accountId), eq(rebelProviderKeys.provider, provider)));
 }
 
-export async function createCloudConversation(accountId: number, title: string) {
+export async function listRebelProjects(accountId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const created = await db.insert(rebelConversations).values({ accountId, title });
-  const rows = await db.select().from(rebelConversations).where(and(eq(rebelConversations.id, Number(created[0].insertId)), eq(rebelConversations.accountId, accountId))).limit(1);
+  return db.select().from(rebelProjects).where(eq(rebelProjects.accountId, accountId)).orderBy(desc(rebelProjects.updatedAt)).limit(100);
+}
+
+export async function getRebelProject(accountId: number, projectId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db.select().from(rebelProjects).where(and(eq(rebelProjects.accountId, accountId), eq(rebelProjects.id, projectId))).limit(1);
+  return rows[0];
+}
+
+export async function createRebelProject(input: { accountId: number; name: string; description?: string; instructions?: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const created = await db.insert(rebelProjects).values(input);
+  const project = await getRebelProject(input.accountId, Number(created[0].insertId));
+  if (!project) throw new Error("Project creation did not return a project");
+  return project;
+}
+
+export async function updateRebelProject(input: { accountId: number; projectId: number; name?: string; description?: string | null; instructions?: string | null }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { accountId, projectId, ...changes } = input;
+  await db.update(rebelProjects).set({ ...changes, updatedAt: new Date() }).where(and(eq(rebelProjects.accountId, accountId), eq(rebelProjects.id, projectId)));
+  return getRebelProject(accountId, projectId);
+}
+
+export async function deleteRebelProject(accountId: number, projectId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.transaction(async (tx) => {
+    await tx.update(rebelConversations).set({ projectId: null }).where(and(eq(rebelConversations.accountId, accountId), eq(rebelConversations.projectId, projectId)));
+    await tx.update(rebelMemoryItems).set({ projectId: null }).where(and(eq(rebelMemoryItems.accountId, accountId), eq(rebelMemoryItems.projectId, projectId)));
+    await tx.delete(rebelProjects).where(and(eq(rebelProjects.accountId, accountId), eq(rebelProjects.id, projectId)));
+  });
+}
+
+export async function getRebelMemorySettings(accountId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db.select().from(rebelMemorySettings).where(eq(rebelMemorySettings.accountId, accountId)).limit(1);
+  return rows[0] ?? { accountId, enabled: true, autoSaveAllowed: false };
+}
+
+export async function updateRebelMemorySettings(input: { accountId: number; enabled?: boolean; autoSaveAllowed?: boolean }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const current = await getRebelMemorySettings(input.accountId);
+  const enabled = input.enabled ?? current.enabled;
+  const autoSaveAllowed = input.autoSaveAllowed ?? current.autoSaveAllowed;
+  await db.insert(rebelMemorySettings).values({ accountId: input.accountId, enabled, autoSaveAllowed }).onDuplicateKeyUpdate({ set: { enabled, autoSaveAllowed, updatedAt: new Date() } });
+  return getRebelMemorySettings(input.accountId);
+}
+
+export async function createCloudConversation(input: { accountId: number; title: string; projectId?: number }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (input.projectId && !await getRebelProject(input.accountId, input.projectId)) throw new Error("Project not found for this account");
+  const created = await db.insert(rebelConversations).values(input);
+  const rows = await db.select().from(rebelConversations).where(and(eq(rebelConversations.id, Number(created[0].insertId)), eq(rebelConversations.accountId, input.accountId))).limit(1);
   if (!rows[0]) throw new Error("Conversation creation did not return a conversation");
   return rows[0];
 }
@@ -247,10 +305,11 @@ export async function listCloudMessages(accountId: number, conversationId: numbe
   return db.select().from(rebelConversationMessages).where(and(eq(rebelConversationMessages.accountId, accountId), eq(rebelConversationMessages.conversationId, conversationId))).orderBy(asc(rebelConversationMessages.createdAt), asc(rebelConversationMessages.id));
 }
 
-export async function createCloudMemory(input: { accountId: number; category: RebelMemoryCategory; title: string; content: string; sourceConversationId?: number }) {
+export async function createCloudMemory(input: { accountId: number; category: RebelMemoryCategory; title: string; content: string; projectId?: number; importance?: number; expiresAt?: Date | null; sourceConversationId?: number }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (input.sourceConversationId && !await getCloudConversation(input.accountId, input.sourceConversationId)) throw new Error("Memory source conversation not found for this account");
+  if (input.projectId && !await getRebelProject(input.accountId, input.projectId)) throw new Error("Memory project not found for this account");
   const created = await db.insert(rebelMemoryItems).values(input);
   const rows = await db.select().from(rebelMemoryItems).where(and(eq(rebelMemoryItems.id, Number(created[0].insertId)), eq(rebelMemoryItems.accountId, input.accountId))).limit(1);
   if (!rows[0]) throw new Error("Memory creation did not return a memory item");
@@ -269,6 +328,16 @@ export async function deleteCloudMemory(accountId: number, memoryId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(rebelMemoryItems).where(and(eq(rebelMemoryItems.id, memoryId), eq(rebelMemoryItems.accountId, accountId)));
+}
+
+export async function updateCloudMemory(input: { accountId: number; memoryId: number; category?: RebelMemoryCategory; title?: string; content?: string; projectId?: number | null; importance?: number; expiresAt?: Date | null }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (input.projectId && !await getRebelProject(input.accountId, input.projectId)) throw new Error("Memory project not found for this account");
+  const { accountId, memoryId, ...changes } = input;
+  await db.update(rebelMemoryItems).set({ ...changes, updatedAt: new Date() }).where(and(eq(rebelMemoryItems.accountId, accountId), eq(rebelMemoryItems.id, memoryId)));
+  const rows = await db.select().from(rebelMemoryItems).where(and(eq(rebelMemoryItems.accountId, accountId), eq(rebelMemoryItems.id, memoryId))).limit(1);
+  return rows[0];
 }
 
 type RebelAnalyticsOutcome = "ok" | "daily_limit" | "rate_limited" | "provider_error" | "fallback_error";
@@ -295,13 +364,13 @@ export async function getOwnerAnalytics(days: number) {
   const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
   const filter = gte(rebelAnalyticsEvents.occurredAt, since);
   const analyticsDay = sql<string>`DATE(${rebelAnalyticsEvents.occurredAt})`.as("analyticsDay");
-  const [summaryRows, totalAccountRows, outcomes, providers, daily] = await Promise.all([
-    db.select({ requests: sql<number>`COUNT(*)`, activeAccounts: sql<number>`COUNT(DISTINCT ${rebelAnalyticsEvents.accountId})`, averageLatencyMs: sql<number>`ROUND(AVG(${rebelAnalyticsEvents.latencyMs}))`, fallbacks: sql<number>`SUM(${rebelAnalyticsEvents.fallbackUsed})` }).from(rebelAnalyticsEvents).where(filter),
-    db.select({ accounts: sql<number>`COUNT(*)` }).from(rebelAccounts),
-    db.select({ outcome: rebelAnalyticsEvents.outcome, count: sql<number>`COUNT(*)` }).from(rebelAnalyticsEvents).where(filter).groupBy(rebelAnalyticsEvents.outcome),
-    db.select({ provider: rebelAnalyticsEvents.provider, count: sql<number>`COUNT(*)`, averageLatencyMs: sql<number>`ROUND(AVG(${rebelAnalyticsEvents.latencyMs}))` }).from(rebelAnalyticsEvents).where(filter).groupBy(rebelAnalyticsEvents.provider),
-    db.select({ date: analyticsDay, requests: sql<number>`COUNT(*)`, activeAccounts: sql<number>`COUNT(DISTINCT ${rebelAnalyticsEvents.accountId})` }).from(rebelAnalyticsEvents).where(filter).groupBy(analyticsDay).orderBy(analyticsDay),
-  ]);
+  // Keep these reads sequential: the project uses a shared lightweight DB
+  // connection, and a parallel fan-out can stall the analytics screen.
+  const summaryRows = await db.select({ requests: sql<number>`COUNT(*)`, activeAccounts: sql<number>`COUNT(DISTINCT ${rebelAnalyticsEvents.accountId})`, averageLatencyMs: sql<number>`ROUND(AVG(${rebelAnalyticsEvents.latencyMs}))`, fallbacks: sql<number>`SUM(${rebelAnalyticsEvents.fallbackUsed})` }).from(rebelAnalyticsEvents).where(filter);
+  const totalAccountRows = await db.select({ accounts: sql<number>`COUNT(*)` }).from(rebelAccounts);
+  const outcomes = await db.select({ outcome: rebelAnalyticsEvents.outcome, count: sql<number>`COUNT(*)` }).from(rebelAnalyticsEvents).where(filter).groupBy(rebelAnalyticsEvents.outcome);
+  const providers = await db.select({ provider: rebelAnalyticsEvents.provider, count: sql<number>`COUNT(*)`, averageLatencyMs: sql<number>`ROUND(AVG(${rebelAnalyticsEvents.latencyMs}))` }).from(rebelAnalyticsEvents).where(filter).groupBy(rebelAnalyticsEvents.provider);
+  const daily = await db.select({ date: analyticsDay, requests: sql<number>`COUNT(*)`, activeAccounts: sql<number>`COUNT(DISTINCT ${rebelAnalyticsEvents.accountId})` }).from(rebelAnalyticsEvents).where(filter).groupBy(analyticsDay).orderBy(analyticsDay);
   const summary = summaryRows[0];
   return {
     days: safeDays,
@@ -316,6 +385,35 @@ export async function getOwnerAnalytics(days: number) {
   };
 }
 
+export async function exportRebelAccountData(accountId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // This database connection is intentionally shared by the lightweight server.
+  // Sequential reads avoid a driver-level queue stall that can occur when this
+  // export fans out multiple queries through the same connection at once.
+  const account = await getRebelAccountById(accountId);
+  const projects = await listRebelProjects(accountId);
+  const conversations = await listCloudConversations(accountId);
+  const messages = await db.select().from(rebelConversationMessages).where(eq(rebelConversationMessages.accountId, accountId)).orderBy(asc(rebelConversationMessages.createdAt), asc(rebelConversationMessages.id));
+  const memories = await listCloudMemories(accountId);
+  const memorySettings = await getRebelMemorySettings(accountId);
+  const providerKeyStatuses = await listRebelProviderKeyStatuses(accountId);
+  if (!account) throw new Error("Account not found");
+  const { passwordHash: _passwordHash, ...safeAccount } = account;
+  return {
+    format: "rebel-ai-account-export-v1",
+    exportedAt: new Date().toISOString(),
+    account: safeAccount,
+    projects,
+    conversations,
+    messages,
+    memories,
+    memorySettings,
+    providerKeyStatuses,
+    exclusions: ["passwordHash", "providerApiKeyValues", "sessionTokens", "analyticsEvents"],
+  };
+}
+
 export async function deleteRebelAccountAndData(accountId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -324,6 +422,8 @@ export async function deleteRebelAccountAndData(accountId: number) {
     await tx.delete(rebelConversationMessages).where(eq(rebelConversationMessages.accountId, accountId));
     await tx.delete(rebelConversations).where(eq(rebelConversations.accountId, accountId));
     await tx.delete(rebelMemoryItems).where(eq(rebelMemoryItems.accountId, accountId));
+    await tx.delete(rebelMemorySettings).where(eq(rebelMemorySettings.accountId, accountId));
+    await tx.delete(rebelProjects).where(eq(rebelProjects.accountId, accountId));
     await tx.delete(rebelProviderKeys).where(eq(rebelProviderKeys.accountId, accountId));
     await tx.delete(rebelDailyUsage).where(eq(rebelDailyUsage.accountId, accountId));
     await tx.delete(rebelRateWindows).where(eq(rebelRateWindows.accountId, accountId));

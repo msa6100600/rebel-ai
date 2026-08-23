@@ -31,6 +31,30 @@ export class AllFreeProvidersRateLimitedError extends Error {
   }
 }
 
+export class AllFreeProvidersUnavailableError extends Error {
+  constructor(public readonly attemptedModels: FreeModel[]) {
+    super("all_free_providers_unavailable");
+  }
+}
+
+const PROVIDER_REQUEST_TIMEOUT_MS = Math.max(5_000, Math.min(45_000, Number.parseInt(process.env.REBEL_PROVIDER_TIMEOUT_MS ?? "18000", 10) || 18_000));
+
+async function fetchProvider(provider: FreeProvider, input: string, init: RequestInit) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROVIDER_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown fetch failure";
+    if ((error instanceof Error && error.name === "AbortError") || controller.signal.aborted) {
+      throw new FreeProviderError("provider_unavailable", provider, undefined, undefined, `request timed out after ${PROVIDER_REQUEST_TIMEOUT_MS}ms`);
+    }
+    throw new FreeProviderError("provider_unavailable", provider, undefined, undefined, message.slice(0, 180));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 const retryAfterSeconds = (response: Response) => {
   const value = response.headers.get("retry-after");
   if (!value) return undefined;
@@ -59,7 +83,7 @@ const userMessage = (messages: ProviderMessage[]) => messages.filter((message) =
 async function callGemini(messages: ProviderMessage[], keyOverride?: string) {
   const key = keyOverride ?? process.env.GEMINI_API_KEY;
   if (!key) throw new FreeProviderError("authentication", "gemini");
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(key)}`, {
+  const response = await fetchProvider("gemini", `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(key)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -77,7 +101,7 @@ async function callOpenAiCompatible(provider: "groq" | "mistral", model: FreeMod
   const key = keyOverride ?? (provider === "groq" ? process.env.GROQ_API_KEY : process.env.MISTRAL_API_KEY);
   if (!key) throw new FreeProviderError("authentication", provider);
   const endpoint = provider === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://api.mistral.ai/v1/chat/completions";
-  const response = await fetch(endpoint, {
+  const response = await fetchProvider(provider, endpoint, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model, messages, temperature: 0.65, max_tokens: 1200, ...(provider === "groq" ? { reasoning_effort: "none" } : {}) }),
@@ -94,19 +118,30 @@ export async function runFreeProvider(model: FreeModel, messages: ProviderMessag
 }
 
 export async function runFreeProviderWithFallback(initialModel: FreeModel, messages: ProviderMessage[], providerKeys?: ProviderKeyOverrides) {
-  const order = [initialModel, ...FREE_MODEL_PRIORITY.filter((model) => model !== initialModel)] as FreeModel[];
+  // The user-selected model is the start of the priority chain. Subsequent
+  // fallbacks only move forward (Gemini → Qwen → Mistral), never back to a
+  // higher-priority model the user intentionally did not select.
+  const initialIndex = FREE_MODEL_PRIORITY.indexOf(initialModel);
+  const order = FREE_MODEL_PRIORITY.slice(initialIndex) as FreeModel[];
   const rateLimited: FreeModel[] = [];
+  const unavailable: FreeModel[] = [];
   for (const model of order) {
     try {
       const answer = await runFreeProvider(model, messages, providerKeys);
-      return { answer, model, fallbackUsed: model !== initialModel, attemptedModels: order.slice(0, rateLimited.length + 1) };
+      return { answer, model, fallbackUsed: model !== initialModel, attemptedModels: order.slice(0, rateLimited.length + unavailable.length + 1) };
     } catch (error) {
       if (error instanceof FreeProviderError && error.kind === "rate_limit") {
         rateLimited.push(model);
         continue;
       }
+      if (error instanceof FreeProviderError && (error.kind === "provider_unavailable" || error.kind === "invalid_response" || error.kind === "authentication")) {
+        unavailable.push(model);
+        console.warn(`[Free providers] ${model} unavailable for this request; trying next free provider`, { kind: error.kind, statusCode: error.statusCode });
+        continue;
+      }
       throw error;
     }
   }
-  throw new AllFreeProvidersRateLimitedError(rateLimited);
+  if (rateLimited.length === order.length) throw new AllFreeProvidersRateLimitedError(rateLimited);
+  throw new AllFreeProvidersUnavailableError([...rateLimited, ...unavailable]);
 }

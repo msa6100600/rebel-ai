@@ -95,6 +95,7 @@ export default function RootLayout() {
               <Stack.Screen name="providers" />
               <Stack.Screen name="call" />
               <Stack.Screen name="gpts" />
+              <Stack.Screen name="projects" />
               <Stack.Screen name="plugins" />
               <Stack.Screen name="keys" />
               <Stack.Screen name="analytics" />

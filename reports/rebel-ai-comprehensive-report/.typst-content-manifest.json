@@ -1,0 +1,11 @@
+{
+  "task_kind": "new-document",
+  "output": "pdf",
+  "signals": [],
+  "hard_constraints": ["Arabic RTL report", "comprehensive chronological project history", "professional PDF"],
+  "content_features": {
+    "code_blocks": 1,
+    "defined_terms": 12,
+    "portrait_images": 0
+  }
+}

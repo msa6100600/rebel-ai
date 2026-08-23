@@ -98,6 +98,8 @@ export type Preferences = {
   selectedProvider: "gemini" | "groq" | "mistral";
   selectedModel: FreeModelId;
   selectedGptId: RebelGptProfile["id"];
+  temporaryChat: boolean;
+  activeProjectId?: number;
   allowSuggestedLearning: boolean;
   hapticsEnabled: boolean;
 };
@@ -157,6 +159,8 @@ const defaultPreferences: Preferences = {
   selectedProvider: "gemini",
   selectedModel: "gemini-3.6-flash",
   selectedGptId: "rebel-core",
+  temporaryChat: false,
+  activeProjectId: undefined,
   allowSuggestedLearning: true,
   hapticsEnabled: true,
 };
