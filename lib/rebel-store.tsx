@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { useRebelSession } from "@/lib/rebel-session";
 import type { TextLanguageId } from "@/shared/rebel-language";
+import type { RebelResponseEvidence } from "@/shared/rebel-evidence";
 
 export type ChatMessage = {
   id: string;
@@ -12,6 +13,7 @@ export type ChatMessage = {
   confidence?: number;
   isError?: boolean;
   model?: FreeModelId;
+  evidence?: RebelResponseEvidence;
 };
 
 export type MemoryItem = {
