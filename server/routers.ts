@@ -225,6 +225,82 @@ export const appRouter = router({
         return { deleted: true as const };
       }),
     }),
+    evidence: router({
+      list: publicProcedure.input(z.object({ projectId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        if (!await db.getRebelProject(account.id, input.projectId)) throw new TRPCError({ code: "NOT_FOUND", message: "المشروع غير متاح لهذا الحساب." });
+        return db.listRebelEvidence(account.id, input.projectId);
+      }),
+      create: publicProcedure.input(z.object({
+        projectId: z.number().int().positive(),
+        kind: z.enum(["claim", "evidence", "assumption", "decision"]),
+        title: z.string().trim().min(1).max(180),
+        content: z.string().trim().min(1).max(3000),
+        confidence: z.number().int().min(0).max(100).optional(),
+        verificationStatus: z.enum(["unverified", "reviewing", "verified", "rejected"]).optional(),
+      })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        try {
+          return await db.createRebelEvidence({ accountId: account.id, ...input });
+        } catch {
+          throw new TRPCError({ code: "NOT_FOUND", message: "تعذر إضافة العنصر لأن المشروع غير متاح لهذا الحساب." });
+        }
+      }),
+      update: publicProcedure.input(z.object({
+        evidenceId: z.number().int().positive(),
+        kind: z.enum(["claim", "evidence", "assumption", "decision"]).optional(),
+        title: z.string().trim().min(1).max(180).optional(),
+        content: z.string().trim().min(1).max(3000).optional(),
+        confidence: z.number().int().min(0).max(100).optional(),
+        verificationStatus: z.enum(["unverified", "reviewing", "verified", "rejected"]).optional(),
+      })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        const item = await db.updateRebelEvidence({ accountId: account.id, ...input });
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "عنصر الدليل غير متاح لهذا الحساب." });
+        return item;
+      }),
+      delete: publicProcedure.input(z.object({ evidenceId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        await db.deleteRebelEvidence(account.id, input.evidenceId);
+        return { deleted: true as const };
+      }),
+    }),
+    artifacts: router({
+      list: publicProcedure.input(z.object({ projectId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        if (!await db.getRebelProject(account.id, input.projectId)) throw new TRPCError({ code: "NOT_FOUND", message: "المشروع غير متاح لهذا الحساب." });
+        return db.listRebelArtifacts(account.id, input.projectId);
+      }),
+      create: publicProcedure.input(z.object({
+        projectId: z.number().int().positive(),
+        type: z.enum(["document", "plan", "table", "decision"]),
+        title: z.string().trim().min(1).max(180),
+        content: z.string().trim().min(1).max(8000),
+      })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        try {
+          return await db.createRebelArtifact({ accountId: account.id, ...input });
+        } catch {
+          throw new TRPCError({ code: "NOT_FOUND", message: "تعذر إنشاء المخرج لأن المشروع غير متاح لهذا الحساب." });
+        }
+      }),
+      update: publicProcedure.input(z.object({
+        artifactId: z.number().int().positive(),
+        type: z.enum(["document", "plan", "table", "decision"]).optional(),
+        title: z.string().trim().min(1).max(180).optional(),
+        content: z.string().trim().min(1).max(8000).optional(),
+      })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        const item = await db.updateRebelArtifact({ accountId: account.id, ...input });
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "المخرج غير متاح لهذا الحساب." });
+        return item;
+      }),
+      delete: publicProcedure.input(z.object({ artifactId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+        const account = await requireRebelAccount(ctx.req);
+        await db.deleteRebelArtifact(account.id, input.artifactId);
+        return { deleted: true as const };
+      }),
+    }),
   }),
   assistant: router({
     chat: publicProcedure
@@ -246,9 +322,10 @@ export const appRouter = router({
         const conversation = input.temporary ? undefined : input.conversationId ? await db.getCloudConversation(account.id, input.conversationId) : await db.createCloudConversation({ accountId: account.id, title: input.message.slice(0, 80), projectId: input.projectId });
         if (!input.temporary && !conversation) throw new TRPCError({ code: "NOT_FOUND", message: "المحادثة غير متاحة لهذا الحساب." });
         if (conversation) await db.appendCloudMessage({ accountId: account.id, conversationId: conversation.id, role: "user", content: input.message });
-        const finalize = async <T extends { answer: string; model: FreeModel; status: "ok" | "daily_limit" | "rate_limited" | "provider_error" | "fallback_error"; analyticsFallbackUsed?: boolean }>(response: T) => {
+        let providerStartedAt: number | undefined;
+        const finalize = async <T extends { answer: string; model: FreeModel; status: "ok" | "daily_limit" | "rate_limited" | "provider_error" | "fallback_error"; analyticsFallbackUsed?: boolean; providerLatencyMs?: number }>(response: T) => {
           if (conversation) await db.appendCloudMessage({ accountId: account.id, conversationId: conversation.id, role: "assistant", content: response.answer, model: response.model });
-          const { analyticsFallbackUsed, ...publicResponse } = response;
+          const { analyticsFallbackUsed, providerLatencyMs, ...publicResponse } = response;
           try {
             await db.recordRebelAnalyticsEvent({
               accountId: account.id,
@@ -257,6 +334,8 @@ export const appRouter = router({
               outcome: publicResponse.status,
               fallbackUsed: analyticsFallbackUsed,
               latencyMs: Date.now() - startedAt,
+              contextLatencyMs: providerStartedAt ? providerStartedAt - startedAt : undefined,
+              providerLatencyMs,
             });
           } catch (analyticsError) {
             console.error("[Analytics] Failed to record aggregated event", analyticsError);
@@ -296,6 +375,7 @@ export const appRouter = router({
         const languageGuidance = getTextLanguageGuidance(input.language);
 
         try {
+          providerStartedAt = Date.now();
           const result = await runFreeProviderWithFallback(input.model as FreeModel, [
               {
                 role: "system",
@@ -316,25 +396,27 @@ export const appRouter = router({
             usage,
             rate,
             analyticsFallbackUsed: result.fallbackUsed,
+            providerLatencyMs: Date.now() - providerStartedAt,
             evidence: responseEvidence,
           });
         } catch (error) {
+          const providerLatencyMs = providerStartedAt ? Date.now() - providerStartedAt : undefined;
           if (error instanceof AllFreeProvidersRateLimitedError) {
-            return finalize({ answer: "الخدمة تعمل عبر نماذج مجانية وقد وصلت جميعها إلى حد الاستخدام المؤقت أو اليومي الآن. جرّب مرة أخرى بعد قليل.", insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage, keyOfferEligible: !providerKeys });
+            return finalize({ answer: "الخدمة تعمل عبر نماذج مجانية وقد وصلت جميعها إلى حد الاستخدام المؤقت أو اليومي الآن. جرّب مرة أخرى بعد قليل.", insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage, keyOfferEligible: !providerKeys, providerLatencyMs });
           }
           if (error instanceof AllFreeProvidersUnavailableError) {
-            return finalize({ answer: "يتعذر الوصول إلى النماذج المجانية الآن بسبب اتصال أو تأخر مؤقت. لم يُستخدم أي نموذج مدفوع. أعد المحاولة بعد قليل.", insight: "وضع Rebel مهلة لكل مزود ثم جرّب النماذج المجانية الأخرى تلقائياً قبل عرض هذه الرسالة.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage, keyOfferEligible: !providerKeys });
+            return finalize({ answer: "يتعذر الوصول إلى النماذج المجانية الآن بسبب اتصال أو تأخر مؤقت. لم يُستخدم أي نموذج مدفوع. أعد المحاولة بعد قليل.", insight: "وضع Rebel مهلة لكل مزود ثم جرّب النماذج المجانية الأخرى تلقائياً قبل عرض هذه الرسالة.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage, keyOfferEligible: !providerKeys, providerLatencyMs });
           }
           if (error instanceof FreeProviderError) {
             const provider = freeProviderMetadata[input.model as FreeModel];
             if (error.kind === "rate_limit") {
               const wait = error.retryAfterSeconds ? ` حاول مجدداً بعد نحو ${error.retryAfterSeconds} ثانية.` : " انتظر قليلاً ثم أعد المحاولة.";
-              return finalize({ answer: `وصلت إلى حد الاستخدام المجاني لـ ${provider.label}.${wait}`, insight: "لم تُرسل هذه المحاولة إلى نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage });
+              return finalize({ answer: `وصلت إلى حد الاستخدام المجاني لـ ${provider.label}.${wait}`, insight: "لم تُرسل هذه المحاولة إلى نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "rate_limited" as const, model: input.model, usage, providerLatencyMs });
             }
-            if (error.kind === "authentication") return finalize({ answer: `تعذر تفويض ${provider.label}. تحقق من مفتاح API المجاني لهذا الموفّر.`, insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage });
-            return finalize({ answer: `خدمة ${provider.label} غير متاحة الآن. أعد المحاولة لاحقاً أو اختر نموذجاً مجانياً آخر.`, insight: "لم يُستخدم أي نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage });
+            if (error.kind === "authentication") return finalize({ answer: `تعذر تفويض ${provider.label}. تحقق من مفتاح API المجاني لهذا الموفّر.`, insight: "لم يُستخدم أي نموذج مدفوع كبديل.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage, providerLatencyMs });
+            return finalize({ answer: `خدمة ${provider.label} غير متاحة الآن. أعد المحاولة لاحقاً أو اختر نموذجاً مجانياً آخر.`, insight: "لم يُستخدم أي نموذج بديل مدفوع.", confidence: 0, suggestedMemory: null, status: "provider_error" as const, model: input.model, usage, providerLatencyMs });
           }
-          return finalize({ ...fallbackReply(input.message), usage });
+          return finalize({ ...fallbackReply(input.message), usage, providerLatencyMs });
         }
       }),
   }),
@@ -364,6 +446,23 @@ export const appRouter = router({
         if (account.role !== "owner") throw new TRPCError({ code: "FORBIDDEN", message: "لوحة التحليلات متاحة لحساب المالك فقط." });
         return db.getOwnerAnalytics(input?.days ?? 7);
       }),
+    providerHealth: publicProcedure.mutation(async ({ ctx }) => {
+      const account = await requireRebelAccount(ctx.req);
+      if (account.role !== "owner") throw new TRPCError({ code: "FORBIDDEN", message: "فحص صحة المزوّدين متاح لحساب المالك فقط." });
+      const checks: Array<{ model: FreeModel; provider: FreeProvider; label: string; status: "available" | "busy" | "unavailable"; detail: string; latencyMs: number }> = [];
+      for (const model of FREE_MODELS) {
+        const startedAt = Date.now();
+        try {
+          await runFreeProvider(model, [{ role: "user", content: "أجب بكلمة واحدة: جاهز" }]);
+          checks.push({ model, provider: freeProviderMetadata[model].provider, label: freeProviderMetadata[model].label, status: "available", detail: "استجاب اختبار قصير بنجاح.", latencyMs: Date.now() - startedAt });
+        } catch (error) {
+          const status = error instanceof FreeProviderError && error.kind === "rate_limit" ? "busy" : "unavailable";
+          const detail = status === "busy" ? "وصل إلى حد مؤقت؛ سيحاول Rebel البديل تلقائياً." : "غير متاح أو غير مفوّض الآن؛ لا يُعرض كمسار عامل.";
+          checks.push({ model, provider: freeProviderMetadata[model].provider, label: freeProviderMetadata[model].label, status, detail, latencyMs: Date.now() - startedAt });
+        }
+      }
+      return checks;
+    }),
     login: publicProcedure
       .input(z.object({ username: z.string().trim().min(1).max(64), password: z.string().min(1).max(256) }))
       .mutation(({ input }) => {

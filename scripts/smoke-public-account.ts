@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { appRouter } from "../server/routers";
 import { getDb, getRebelRateUsage, reserveRebelRateRequest } from "../server/db";
-import { rebelAccounts, rebelAnalyticsEvents, rebelConversationMessages, rebelConversations, rebelDailyUsage, rebelMemoryItems, rebelMemorySettings, rebelProjects, rebelProviderKeys, rebelRateWindows } from "../drizzle/schema";
+import { rebelAccounts, rebelAnalyticsEvents, rebelConversationMessages, rebelConversations, rebelDailyUsage, rebelEvidenceItems, rebelMemoryItems, rebelMemorySettings, rebelProjectArtifacts, rebelProjects, rebelProviderKeys, rebelRateWindows } from "../drizzle/schema";
 import type { TrpcContext } from "../server/_core/context";
 
 const context = (authorization?: string): TrpcContext => ({
@@ -36,6 +36,16 @@ async function main() {
     console.log("[smoke] اختبار المشروع والذاكرة والتصدير");
     const project = await caller.cloud.projects.create({ name: "مشروع الاختبار", description: "عزل وربط الذاكرة", instructions: "أجب بالعربية بإيجاز." });
     if (!(await caller.cloud.projects.list()).some((item) => item.id === project.id)) throw new Error("Project was not created for the account");
+    const evidence = await caller.cloud.evidence.create({ projectId: project.id, kind: "evidence", title: "دليل اختبار", content: "هذه معلومة اختبارية للمشروع.", confidence: 80, verificationStatus: "reviewing" });
+    const evidenceItems = await caller.cloud.evidence.list({ projectId: project.id });
+    if (!evidenceItems.some((item) => item.id === evidence.id)) throw new Error("Evidence item was not created for the project");
+    const revisedEvidence = await caller.cloud.evidence.update({ evidenceId: evidence.id, verificationStatus: "verified", confidence: 90 });
+    if (revisedEvidence.verificationStatus !== "verified" || revisedEvidence.confidence !== 90) throw new Error("Evidence item update failed");
+    const artifact = await caller.cloud.artifacts.create({ projectId: project.id, type: "plan", title: "خطة اختبار", content: "خطوة أولى\nخطوة ثانية" });
+    const artifacts = await caller.cloud.artifacts.list({ projectId: project.id });
+    if (!artifacts.some((item) => item.id === artifact.id)) throw new Error("Project artifact was not created");
+    const revisedArtifact = await caller.cloud.artifacts.update({ artifactId: artifact.id, title: "خطة اختبار معدلة" });
+    if (revisedArtifact.title !== "خطة اختبار معدلة") throw new Error("Project artifact update failed");
     console.log("[smoke] فحص التحليلات وسجل المحادثة");
     const analyticsDatabase = await getDb();
     if (!analyticsDatabase || (await analyticsDatabase.select().from(rebelAnalyticsEvents).where(eq(rebelAnalyticsEvents.accountId, accountId))).length < 1) throw new Error("Chat route did not record an aggregated analytics event");
@@ -56,7 +66,7 @@ async function main() {
     if (memorySettings.enabled) throw new Error("Memory settings update failed");
     console.log("[smoke] تصدير البيانات");
     const exported = await caller.account.exportData();
-    if (!exported.projects.some((item) => item.id === project.id) || !exported.memories.some((item) => item.id === memory.id) || "passwordHash" in exported.account) throw new Error("Account export did not include safe owned data");
+    if (!exported.projects.some((item) => item.id === project.id) || !exported.memories.some((item) => item.id === memory.id) || !exported.evidence.some((item) => item.id === evidence.id) || !exported.artifacts.some((item) => item.id === artifact.id) || "passwordHash" in exported.account) throw new Error("Account export did not include safe owned data");
     console.log("[smoke] اختبار الاستعادة من جلسة ثانية");
     const restoredCaller = appRouter.createCaller(context(`Bearer ${registration.token}`));
     const restoredMessages = await restoredCaller.cloud.conversations.messages({ conversationId: cloudConversationId });
@@ -80,6 +90,12 @@ async function main() {
     const secondUsage = await secondCaller.account.usage();
     if (secondUsage.used !== 0) throw new Error("Daily usage was not isolated between accounts");
     if ((await secondCaller.cloud.memories.list()).length !== 0) throw new Error("Cloud memories leaked to the second account");
+    await secondCaller.cloud.evidence.list({ projectId: project.id }).then(() => { throw new Error("Evidence items leaked to the second account"); }).catch((error) => {
+      if (error.message === "Evidence items leaked to the second account") throw error;
+    });
+    await secondCaller.cloud.artifacts.list({ projectId: project.id }).then(() => { throw new Error("Project artifacts leaked to the second account"); }).catch((error) => {
+      if (error.message === "Project artifacts leaked to the second account") throw error;
+    });
     await secondCaller.cloud.conversations.messages({ conversationId: cloudConversationId }).then(() => { throw new Error("Cloud conversation leaked to the second account"); }).catch((error) => {
       if (error.message === "Cloud conversation leaked to the second account") throw error;
     });
@@ -95,6 +111,8 @@ async function main() {
       database.select().from(rebelConversationMessages).where(eq(rebelConversationMessages.accountId, deletedAccountId)),
       database.select().from(rebelConversations).where(eq(rebelConversations.accountId, deletedAccountId)),
       database.select().from(rebelMemoryItems).where(eq(rebelMemoryItems.accountId, deletedAccountId)),
+      database.select().from(rebelEvidenceItems).where(eq(rebelEvidenceItems.accountId, deletedAccountId)),
+      database.select().from(rebelProjectArtifacts).where(eq(rebelProjectArtifacts.accountId, deletedAccountId)),
       database.select().from(rebelMemorySettings).where(eq(rebelMemorySettings.accountId, deletedAccountId)),
       database.select().from(rebelProjects).where(eq(rebelProjects.accountId, deletedAccountId)),
       database.select().from(rebelProviderKeys).where(eq(rebelProviderKeys.accountId, deletedAccountId)),
@@ -113,6 +131,8 @@ async function main() {
           await database.delete(rebelConversationMessages).where(eq(rebelConversationMessages.accountId, id));
           await database.delete(rebelConversations).where(eq(rebelConversations.accountId, id));
           await database.delete(rebelMemoryItems).where(eq(rebelMemoryItems.accountId, id));
+          await database.delete(rebelEvidenceItems).where(eq(rebelEvidenceItems.accountId, id));
+          await database.delete(rebelProjectArtifacts).where(eq(rebelProjectArtifacts.accountId, id));
           await database.delete(rebelMemorySettings).where(eq(rebelMemorySettings.accountId, id));
           await database.delete(rebelProjects).where(eq(rebelProjects.accountId, id));
           await database.delete(rebelProviderKeys).where(eq(rebelProviderKeys.accountId, id));

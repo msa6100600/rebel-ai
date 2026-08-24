@@ -108,6 +108,33 @@ export const rebelMemoryItems = mysqlTable("rebel_memory_items", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (table) => [index("rebel_memory_account_category_idx").on(table.accountId, table.category), index("rebel_memory_account_project_idx").on(table.accountId, table.projectId), index("rebel_memory_account_updated_idx").on(table.accountId, table.updatedAt)]);
 
+export const rebelEvidenceItems = mysqlTable("rebel_evidence_items", {
+  id: int("id").autoincrement().primaryKey(),
+  accountId: int("accountId").notNull(),
+  projectId: int("projectId").notNull(),
+  kind: mysqlEnum("kind", ["claim", "evidence", "assumption", "decision"]).notNull(),
+  title: varchar("title", { length: 180 }).notNull(),
+  content: text("content").notNull(),
+  confidence: int("confidence").default(50).notNull(),
+  verificationStatus: mysqlEnum("verificationStatus", ["unverified", "reviewing", "verified", "rejected"]).default("unverified").notNull(),
+  sourceMemoryId: int("sourceMemoryId"),
+  sourceConversationId: int("sourceConversationId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => [index("rebel_evidence_account_project_updated_idx").on(table.accountId, table.projectId, table.updatedAt), index("rebel_evidence_account_status_idx").on(table.accountId, table.verificationStatus)]);
+
+export const rebelProjectArtifacts = mysqlTable("rebel_project_artifacts", {
+  id: int("id").autoincrement().primaryKey(),
+  accountId: int("accountId").notNull(),
+  projectId: int("projectId").notNull(),
+  type: mysqlEnum("type", ["document", "plan", "table", "decision"]).notNull(),
+  title: varchar("title", { length: 180 }).notNull(),
+  content: text("content").notNull(),
+  sourceConversationId: int("sourceConversationId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => [index("rebel_artifact_account_project_updated_idx").on(table.accountId, table.projectId, table.updatedAt), index("rebel_artifact_account_type_idx").on(table.accountId, table.type)]);
+
 export const rebelRateWindows = mysqlTable("rebel_rate_windows", {
   id: int("id").autoincrement().primaryKey(),
   accountId: int("accountId").notNull(),
@@ -124,6 +151,8 @@ export const rebelAnalyticsEvents = mysqlTable("rebel_analytics_events", {
   outcome: mysqlEnum("outcome", ["ok", "daily_limit", "rate_limited", "provider_error", "fallback_error"]).notNull(),
   fallbackUsed: int("fallbackUsed").default(0).notNull(),
   latencyMs: int("latencyMs"),
+  contextLatencyMs: int("contextLatencyMs"),
+  providerLatencyMs: int("providerLatencyMs"),
   occurredAt: timestamp("occurredAt").defaultNow().notNull(),
 }, (table) => [index("rebel_analytics_occurred_idx").on(table.occurredAt), index("rebel_analytics_account_occurred_idx").on(table.accountId, table.occurredAt), index("rebel_analytics_provider_occurred_idx").on(table.provider, table.occurredAt)]);
 
@@ -131,3 +160,6 @@ export type RebelAccount = typeof rebelAccounts.$inferSelect;
 export type RebelProvider = "gemini" | "groq" | "mistral";
 export type RebelMemoryCategory = "profile" | "preference" | "goal" | "project" | "decision" | "temporary";
 export type RebelProject = typeof rebelProjects.$inferSelect;
+export type RebelEvidenceKind = "claim" | "evidence" | "assumption" | "decision";
+export type RebelEvidenceStatus = "unverified" | "reviewing" | "verified" | "rejected";
+export type RebelArtifactType = "document" | "plan" | "table" | "decision";

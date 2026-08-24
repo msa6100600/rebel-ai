@@ -43,6 +43,27 @@
       "when": 1787486818767,
       "tag": "0005_motionless_silvermane",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1787609841276,
+      "tag": "0006_grey_black_bolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1787610191338,
+      "tag": "0007_certain_prowler",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1787610508869,
+      "tag": "0008_jazzy_the_order",
+      "breakpoints": true
     }
   ]
 }
