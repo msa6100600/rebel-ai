@@ -14,6 +14,7 @@ describe("intelligent model router", () => {
     const decision = decideModel({ message: "حلل لي هذه الفكرة العربية مع توضيح الافتراضات والحدود" });
     expect(decision.initialModel).toBe("gemini-3.6-flash");
     expect(decision.reason).toBe("arabic-heavy");
+    expect(decision.order).toEqual(["gemini-3.6-flash", "qwen/qwen3.6-27b", "mistral-small-latest"]);
   });
 
   it("starts short automatic requests at Gemini", () => {

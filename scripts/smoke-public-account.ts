@@ -31,7 +31,7 @@ async function main() {
     if (!rateOne.allowed || !rateTwo.allowed || rateThree.allowed || rateUsage.used !== 2) throw new Error("Per-account rate limit check failed");
     console.log("[smoke] اختبار المحادثة مع النموذج");
     const chat = await caller.assistant.chat({ message: "اكتب كلمة جاهز فقط.", memories: [], language: "ar-SA", model: "gemini-3.6-flash", gptId: "rebel-core" });
-    if (!chat.answer.trim() || !chat.conversationId || chat.usage.used !== 1) throw new Error("Authenticated chat or per-account quota increment check failed");
+    if (!chat.answer.trim() || !chat.conversationId || chat.usage.used !== 1 || !chat.routerReason || !chat.routerOrder?.length) throw new Error("Authenticated chat, router metadata, or per-account quota increment check failed");
     const cloudConversationId = chat.conversationId;
     console.log("[smoke] اختبار المشروع والذاكرة والتصدير");
     const project = await caller.cloud.projects.create({ name: "مشروع الاختبار", description: "عزل وربط الذاكرة", instructions: "أجب بالعربية بإيجاز." });
@@ -48,7 +48,8 @@ async function main() {
     if (revisedArtifact.title !== "خطة اختبار معدلة") throw new Error("Project artifact update failed");
     console.log("[smoke] فحص التحليلات وسجل المحادثة");
     const analyticsDatabase = await getDb();
-    if (!analyticsDatabase || (await analyticsDatabase.select().from(rebelAnalyticsEvents).where(eq(rebelAnalyticsEvents.accountId, accountId))).length < 1) throw new Error("Chat route did not record an aggregated analytics event");
+    const analyticsEvents = analyticsDatabase ? await analyticsDatabase.select().from(rebelAnalyticsEvents).where(eq(rebelAnalyticsEvents.accountId, accountId)) : [];
+    if (!analyticsEvents.length || !analyticsEvents.some((event) => event.routerReason && event.routerOrder)) throw new Error("Chat route did not record aggregated router metadata");
     const conversationMessages = await caller.cloud.conversations.messages({ conversationId: cloudConversationId });
     if (conversationMessages.length < 2 || conversationMessages[0].content !== "اكتب كلمة جاهز فقط.") throw new Error("Cloud conversation did not persist the user and assistant messages");
     if (process.env.REBEL_RATE_LIMIT_PER_MINUTE === "1") {

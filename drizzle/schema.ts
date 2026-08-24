@@ -148,13 +148,15 @@ export const rebelAnalyticsEvents = mysqlTable("rebel_analytics_events", {
   accountId: int("accountId").notNull(),
   provider: varchar("provider", { length: 32 }),
   model: varchar("model", { length: 128 }),
+  routerReason: varchar("routerReason", { length: 40 }),
+  routerOrder: varchar("routerOrder", { length: 255 }),
   outcome: mysqlEnum("outcome", ["ok", "daily_limit", "rate_limited", "provider_error", "fallback_error"]).notNull(),
   fallbackUsed: int("fallbackUsed").default(0).notNull(),
   latencyMs: int("latencyMs"),
   contextLatencyMs: int("contextLatencyMs"),
   providerLatencyMs: int("providerLatencyMs"),
   occurredAt: timestamp("occurredAt").defaultNow().notNull(),
-}, (table) => [index("rebel_analytics_occurred_idx").on(table.occurredAt), index("rebel_analytics_account_occurred_idx").on(table.accountId, table.occurredAt), index("rebel_analytics_provider_occurred_idx").on(table.provider, table.occurredAt)]);
+}, (table) => [index("rebel_analytics_occurred_idx").on(table.occurredAt), index("rebel_analytics_account_occurred_idx").on(table.accountId, table.occurredAt), index("rebel_analytics_provider_occurred_idx").on(table.provider, table.occurredAt), index("rebel_analytics_router_reason_idx").on(table.routerReason, table.occurredAt)]);
 
 export type RebelAccount = typeof rebelAccounts.$inferSelect;
 export type RebelProvider = "gemini" | "groq" | "mistral";

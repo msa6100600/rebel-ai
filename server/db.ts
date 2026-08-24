@@ -419,14 +419,17 @@ export async function updateCloudMemory(input: { accountId: number; memoryId: nu
 }
 
 type RebelAnalyticsOutcome = "ok" | "daily_limit" | "rate_limited" | "provider_error" | "fallback_error";
+type RebelRouterReason = "user-preference" | "short-fast" | "arabic-heavy" | "default-balanced";
 
-export async function recordRebelAnalyticsEvent(input: { accountId: number; provider?: string; model?: string; outcome: RebelAnalyticsOutcome; fallbackUsed?: boolean; latencyMs?: number; contextLatencyMs?: number; providerLatencyMs?: number }) {
+export async function recordRebelAnalyticsEvent(input: { accountId: number; provider?: string; model?: string; routerReason?: RebelRouterReason; routerOrder?: string; outcome: RebelAnalyticsOutcome; fallbackUsed?: boolean; latencyMs?: number; contextLatencyMs?: number; providerLatencyMs?: number }) {
   const db = await getDb();
   if (!db) return;
   await db.insert(rebelAnalyticsEvents).values({
     accountId: input.accountId,
     provider: input.provider,
     model: input.model,
+    routerReason: input.routerReason,
+    routerOrder: input.routerOrder,
     outcome: input.outcome,
     fallbackUsed: input.fallbackUsed ? 1 : 0,
     latencyMs: input.latencyMs,
@@ -450,6 +453,7 @@ export async function getOwnerAnalytics(days: number) {
   const totalAccountRows = await db.select({ accounts: sql<number>`COUNT(*)` }).from(rebelAccounts);
   const outcomes = await db.select({ outcome: rebelAnalyticsEvents.outcome, count: sql<number>`COUNT(*)` }).from(rebelAnalyticsEvents).where(filter).groupBy(rebelAnalyticsEvents.outcome);
   const providers = await db.select({ provider: rebelAnalyticsEvents.provider, count: sql<number>`COUNT(*)`, averageLatencyMs: sql<number>`ROUND(AVG(${rebelAnalyticsEvents.latencyMs}))` }).from(rebelAnalyticsEvents).where(filter).groupBy(rebelAnalyticsEvents.provider);
+  const routerReasons = await db.select({ reason: rebelAnalyticsEvents.routerReason, count: sql<number>`COUNT(*)` }).from(rebelAnalyticsEvents).where(and(filter, sql`${rebelAnalyticsEvents.routerReason} IS NOT NULL`)).groupBy(rebelAnalyticsEvents.routerReason);
   const daily = await db.select({ date: analyticsDay, requests: sql<number>`COUNT(*)`, activeAccounts: sql<number>`COUNT(DISTINCT ${rebelAnalyticsEvents.accountId})` }).from(rebelAnalyticsEvents).where(filter).groupBy(analyticsDay).orderBy(analyticsDay);
   const summary = summaryRows[0];
   return {
@@ -463,6 +467,7 @@ export async function getOwnerAnalytics(days: number) {
     fallbacks: asNumber(summary?.fallbacks),
     outcomes: outcomes.map((item) => ({ outcome: item.outcome, count: asNumber(item.count) })),
     providers: providers.map((item) => ({ provider: item.provider ?? "unknown", count: asNumber(item.count), averageLatencyMs: asNumber(item.averageLatencyMs) })),
+    routerReasons: routerReasons.map((item) => ({ reason: item.reason ?? "unknown", count: asNumber(item.count) })),
     daily: daily.map((item) => ({ date: item.date, requests: asNumber(item.requests), activeAccounts: asNumber(item.activeAccounts) })),
   };
 }

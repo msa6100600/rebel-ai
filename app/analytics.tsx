@@ -10,6 +10,7 @@ import { trpc } from "@/lib/trpc";
 
 const outcomeLabels: Record<string, string> = { ok: "ناجح", daily_limit: "حد يومي", rate_limited: "حد زمني أو موفّر", provider_error: "خطأ موفّر", fallback_error: "تعذر المسار" };
 const providerLabels: Record<string, string> = { gemini: "Gemini", groq: "Groq", mistral: "Mistral", unknown: "غير محدد" };
+const routerReasonLabels: Record<string, string> = { "user-preference": "اختيار المستخدم", "short-fast": "طلب قصير وسريع", "arabic-heavy": "طلب عربي مكثف", "default-balanced": "توازن افتراضي", unknown: "غير محدد" };
 const healthLabels: Record<string, string> = { available: "متاح", busy: "مزدحم", unavailable: "غير متاح" };
 
 export default function AnalyticsScreen() {
@@ -34,6 +35,8 @@ export default function AnalyticsScreen() {
       <View style={styles.listCard}>{data.outcomes.length ? data.outcomes.map((item) => <MetricLine key={item.outcome} label={outcomeLabels[item.outcome] ?? item.outcome} value={item.count} />) : <Empty label="لا توجد أحداث تحليلية ضمن هذه الفترة بعد." />}</View>
       <Section title="الموفّرات الفعلية" subtitle="يعكس النموذج الذي أنهى الرد، وليس مفتاح المستخدم أو محتوى رسالته." />
       <View style={styles.listCard}>{data.providers.length ? data.providers.map((item) => <MetricLine key={item.provider} label={providerLabels[item.provider] ?? item.provider} value={item.count} detail={item.averageLatencyMs ? `${(item.averageLatencyMs / 1000).toFixed(1)} ث متوسط` : undefined} />) : <Empty label="لا توجد بيانات موفّرين بعد." />}</View>
+      <Section title="أسباب توجيه النموذج" subtitle="قرارات Router مجمعة فقط؛ لا تعرض الرسائل أو الحسابات أو المفاتيح." />
+      <View style={styles.listCard}>{data.routerReasons.length ? data.routerReasons.map((item) => <MetricLine key={item.reason} label={routerReasonLabels[item.reason] ?? item.reason} value={item.count} />) : <Empty label="ستظهر أسباب التوجيه بعد أول رد جديد ضمن هذه الفترة." />}</View>
       <View style={styles.healthHeader}><View style={styles.healthCopy}><Text style={styles.sectionTitle}>فحص المزوّدين الآن</Text><Text style={styles.sectionSubtitle}>اختبار يدوي قصير للمالك. لا يعرض مفاتيح أو محتوى مستخدم.</Text></View><Pressable disabled={providerHealth.isPending} onPress={() => providerHealth.mutate()} style={[styles.healthButton, providerHealth.isPending && styles.healthButtonDisabled]}><Text style={styles.healthButtonText}>{providerHealth.isPending ? "جارٍ الفحص…" : "فحص"}</Text></Pressable></View>
       {providerHealth.data ? <View style={styles.listCard}>{providerHealth.data.map((item) => <MetricLine key={item.model} label={`${item.label} · ${healthLabels[item.status]}`} value={`${(item.latencyMs / 1000).toFixed(1)} ث`} detail={item.detail} />)}</View> : null}
       <Section title="النشاط اليومي" subtitle="الطلبات والحسابات النشطة، دون هوية أو محتوى." />

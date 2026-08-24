@@ -11,8 +11,17 @@ import { deviceVoiceLabel, selectDeviceVoice, type DeviceVoice } from "@/lib/dev
 import { haptic } from "@/lib/haptics";
 import { useRebelStore } from "@/lib/rebel-store";
 import { trpc } from "@/lib/trpc";
+import { resolveTextLanguage } from "@/shared/rebel-language";
 
 const getMimeType = () => Platform.OS === "ios" ? "audio/m4a" : "audio/mp4";
+const describeVoiceError = (error: unknown) => {
+  const message = error instanceof Error ? error.message.toLocaleLowerCase() : "";
+  if (message.includes("empty transcription")) return "لم ألتقط كلاماً واضحاً. حاول التحدث بوضوح ثم ارفع إصبعك.";
+  if (message.includes("audio file") || message.includes("missing audio")) return "لم يُحفظ التسجيل بشكل صالح. جرّب جولة صوتية جديدة.";
+  if (message.includes("permission") || message.includes("microphone")) return "يلزم السماح بالميكروفون حتى يتمكن Rebal Live من الاستماع.";
+  if (message.includes("network") || message.includes("fetch")) return "تعذر الوصول إلى الخدمة الآن. تحقق من اتصال الإنترنت ثم جرّب مرة أخرى.";
+  return "تعذر إتمام هذه الجولة الصوتية. تحقق من الميكروفون والاتصال ثم جرّب مرة أخرى.";
+};
 
 export default function CallScreen() {
   const router = useRouter();
@@ -21,7 +30,7 @@ export default function CallScreen() {
   const recorderState = useAudioRecorderState(recorder);
   const chat = trpc.assistant.chat.useMutation();
   const transcription = trpc.voice.transcribe.useMutation();
-  const [status, setStatus] = useState<"connecting" | "ready" | "listening" | "thinking" | "speaking" | "ended">("connecting");
+  const [status, setStatus] = useState<"connecting" | "ready" | "listening" | "transcribing" | "thinking" | "speaking" | "ended">("connecting");
   const [elapsed, setElapsed] = useState(0);
   const [muted, setMuted] = useState(false);
   const [lastHeard, setLastHeard] = useState("اضغط زر الميكروفون لبدء التحدث.");
@@ -40,22 +49,23 @@ export default function CallScreen() {
     return () => clearInterval(timer);
   }, [status]);
   useEffect(() => () => { Speech.stop(); }, []);
+  const speechLocale = resolveTextLanguage(preferences.textLanguage).locale;
   useEffect(() => {
     let active = true;
     Speech.getAvailableVoicesAsync()
       .then((voices) => {
-        if (active) setNativeVoice(selectDeviceVoice(voices, preferences.selectedNativeVoiceId, preferences.preferredLanguage));
+        if (active) setNativeVoice(selectDeviceVoice(voices, preferences.selectedNativeVoiceId, speechLocale));
       })
       .catch(() => { if (active) setNativeVoice(undefined); });
     return () => { active = false; };
-  }, [preferences.preferredLanguage, preferences.selectedNativeVoiceId]);
+  }, [preferences.selectedNativeVoiceId, speechLocale]);
 
   const time = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
-  const statusText = status === "connecting" ? "جارٍ تشغيل Rebal Live…" : status === "listening" ? "أستمع إليك الآن" : status === "thinking" ? "أحلل رسالتك…" : status === "speaking" ? "Rebel AI يتحدث" : status === "ended" ? "انتهت الجلسة" : "Rebal Live جاهز";
+  const statusText = status === "connecting" ? "جارٍ تشغيل Rebal Live…" : status === "listening" ? "أستمع إليك الآن" : status === "transcribing" ? "أحوّل صوتك إلى نص…" : status === "thinking" ? "أحلل رسالتك…" : status === "speaking" ? "Rebel AI يتحدث" : status === "ended" ? "انتهت الجلسة" : "Rebal Live جاهز";
 
   const speakAnswer = async (text: string) => {
     const available = await Speech.getAvailableVoicesAsync().catch(() => []);
-    const selectedNative = selectDeviceVoice(available, preferences.selectedNativeVoiceId, preferences.preferredLanguage);
+    const selectedNative = selectDeviceVoice(available, preferences.selectedNativeVoiceId, speechLocale);
     setNativeVoice(selectedNative);
     setStatus("speaking");
     Speech.speak(text, { language: selectedNative?.language ?? preferences.preferredLanguage, voice: selectedNative?.identifier, rate: 0.96, pitch: 1, onDone: () => setStatus("ready"), onError: () => setStatus("ready") });
@@ -105,20 +115,23 @@ export default function CallScreen() {
       if (!audioUri) throw new Error("missing audio");
       const audioFile = new File(audioUri);
       if (!audioFile.exists || audioFile.size <= 0) throw new Error("audio file unavailable");
-      setStatus("thinking");
+      setStatus("transcribing");
+      setLastHeard("جارٍ تحويل صوتك إلى نص مع الحفاظ على اللغة أو اللهجة قدر الإمكان…");
       const transcriptionResult = await transcription.mutateAsync({ audioBase64: await audioFile.base64(), mimeType: getMimeType(), language: preferences.preferredLanguage });
-      if (!transcriptionResult.ok || !transcriptionResult.text) throw new Error("empty transcription");
+      if (!transcriptionResult.ok || !transcriptionResult.text) throw new Error(transcriptionResult.ok ? "empty transcription" : transcriptionResult.error || "empty transcription");
       setLastHeard(transcriptionResult.text);
       if (!preferences.temporaryChat) addMessage({ role: "user", text: transcriptionResult.text });
-      const result = await chat.mutateAsync({ message: transcriptionResult.text, projectId: preferences.temporaryChat ? undefined : preferences.activeProjectId, temporary: preferences.temporaryChat, memories: [], language: preferences.textLanguage, model: preferences.selectedModel, gptId: preferences.selectedGptId });
+      setStatus("thinking");
+      const result = await chat.mutateAsync({ message: transcriptionResult.text, projectId: preferences.temporaryChat ? undefined : preferences.activeProjectId, temporary: preferences.temporaryChat, memories: [], language: preferences.textLanguage, modality: "voice", model: preferences.selectedModel, gptId: preferences.selectedGptId });
       if (!preferences.temporaryChat) addMessage({ role: "assistant", text: result.answer, insight: result.insight, confidence: result.confidence, model: result.model });
       setLastAnswer(result.answer);
       haptic.success();
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => undefined);
       await speakAnswer(result.answer);
-    } catch {
+    } catch (error) {
       recordingRef.current = false;
       setStatus("ready");
-      setLastAnswer("تعذر إتمام هذه الجولة الصوتية. تحقق من اتصال الإنترنت وجرّب مرة أخرى.");
+      setLastAnswer(describeVoiceError(error));
       haptic.warning();
     }
   };
@@ -143,11 +156,11 @@ export default function CallScreen() {
 
   return <ScreenContainer edges={["top", "bottom", "left", "right"]} className="px-5" containerClassName="bg-background" safeAreaClassName="bg-background"><View style={styles.page}>
     <Text style={styles.eyebrow}>REBAL LIVE · PUSH-TO-TALK</Text><Text style={styles.timer}>{time}</Text><Text style={styles.status}>{statusText}</Text>{preferences.temporaryChat ? <Text style={styles.temporaryNote}>وضع مؤقت: لا تحفظ هذه الجولة في السجل أو الذاكرة.</Text> : null}
-    <View style={[styles.orb, status === "listening" && styles.orbListening, status === "speaking" && styles.orbSpeaking]}><View style={styles.orbInner}><IconSymbol name="brain.head.profile" size={62} color="#2563EB" /></View></View>
-    <View style={styles.identity}><Text style={styles.identityName}>{nativeVoice?.name || "صوت الجهاز"}</Text><Text style={styles.identityDetail}>{deviceVoiceLabel(nativeVoice)}</Text></View>
+    <View style={[styles.orb, status === "listening" && styles.orbListening, (status === "transcribing" || status === "thinking") && styles.orbThinking, status === "speaking" && styles.orbSpeaking]}><View style={styles.orbInner}><IconSymbol name="brain.head.profile" size={62} color="#2563EB" /></View></View>
+    <View style={styles.identity}><Text style={styles.identityName}>{nativeVoice?.name || "صوت الجهاز"}</Text><Text style={styles.identityDetail}>{deviceVoiceLabel(nativeVoice)} · لغة الرد: {resolveTextLanguage(preferences.textLanguage).label}</Text></View>
     <View style={styles.transcriptCard}><Text style={styles.cardLabel}>أنت قلت</Text><Text style={styles.transcript}>{lastHeard}</Text></View><View style={styles.answerCard}><Text style={styles.cardLabel}>رد Rebel AI</Text><Text style={styles.answer}>{lastAnswer}</Text></View>
-    <View style={styles.controls}><Pressable accessibilityRole="button" accessibilityLabel={muted ? "إلغاء كتم الميكروفون" : "كتم الميكروفون"} onPress={toggleMute} style={({ pressed }) => [styles.secondaryControl, muted && styles.mutedControl, pressed && styles.pressed]}><IconSymbol name={muted ? "mic.slash.fill" : "mic.fill"} size={25} color="#4E4E58" /></Pressable><Pressable accessibilityRole="button" accessibilityLabel={recorderState.isRecording ? "حرر الزر لإرسال كلامك" : status === "speaking" ? "اضغط لمقاطعة الرد وبدء جولة جديدة" : "اضغط باستمرار للتحدث مع Rebal Live"} disabled={status === "thinking" || muted} onPressIn={() => { pressActiveRef.current = true; startVoiceRecording(); }} onPressOut={() => { pressActiveRef.current = false; finishVoiceTurn(); }} style={({ pressed }) => [styles.primaryControl, (recorderState.isRecording || pressed) && styles.recordingControl, muted && styles.disabled, pressed && styles.pressed]}>{status === "thinking" ? <ActivityIndicator color="#FFFFFF" /> : <IconSymbol name="mic.fill" size={30} color="#FFFFFF" />}</Pressable><Pressable accessibilityRole="button" accessibilityLabel="إنهاء Rebal Live" onPress={endCall} style={({ pressed }) => [styles.endControl, pressed && styles.pressed]}><IconSymbol name="xmark" size={23} color="#B2273E" /></Pressable></View><Text style={styles.hint}>{recorderState.isRecording ? "استمر بالضغط أثناء الحديث، ثم ارفع إصبعك لإرسال الجولة." : muted ? "الميكروفون مكتوم." : status === "speaking" ? "يمكنك الضغط على الميكروفون لمقاطعة الرد وبدء جولة جديدة." : "اضغط باستمرار وتحدث؛ عند الإفلات سيحلل Rebel AI كلامك ويرد بصوت قبل الجولة التالية."}</Text>
+    <View style={styles.controls}><Pressable accessibilityRole="button" accessibilityLabel={muted ? "إلغاء كتم الميكروفون" : "كتم الميكروفون"} onPress={toggleMute} style={({ pressed }) => [styles.secondaryControl, muted && styles.mutedControl, pressed && styles.pressed]}><IconSymbol name={muted ? "mic.slash.fill" : "mic.fill"} size={25} color="#4E4E58" /></Pressable><Pressable accessibilityRole="button" accessibilityLabel={recorderState.isRecording ? "حرر الزر لإرسال كلامك" : status === "speaking" ? "اضغط لمقاطعة الرد وبدء جولة جديدة" : "اضغط باستمرار للتحدث مع Rebal Live"} disabled={status === "transcribing" || status === "thinking" || muted} onPressIn={() => { pressActiveRef.current = true; startVoiceRecording(); }} onPressOut={() => { pressActiveRef.current = false; finishVoiceTurn(); }} style={({ pressed }) => [styles.primaryControl, (recorderState.isRecording || pressed) && styles.recordingControl, (muted || status === "transcribing" || status === "thinking") && styles.disabled, pressed && styles.pressed]}>{status === "transcribing" || status === "thinking" ? <ActivityIndicator color="#FFFFFF" /> : <IconSymbol name="mic.fill" size={30} color="#FFFFFF" />}</Pressable><Pressable accessibilityRole="button" accessibilityLabel="إنهاء Rebal Live" onPress={endCall} style={({ pressed }) => [styles.endControl, pressed && styles.pressed]}><IconSymbol name="xmark" size={23} color="#B2273E" /></Pressable></View><Text style={styles.hint}>{recorderState.isRecording ? "استمر بالضغط أثناء الحديث، ثم ارفع إصبعك لإرسال الجولة." : muted ? "الميكروفون مكتوم." : status === "transcribing" ? "جارٍ تحويل التسجيل إلى نص؛ لا تغلق التطبيق الآن." : status === "thinking" ? "وصل النص إلى Rebel AI؛ جارٍ إعداد الرد." : status === "speaking" ? "يمكنك الضغط على الميكروفون لمقاطعة الرد وبدء جولة جديدة." : "اضغط باستمرار وتحدث؛ عند الإفلات سيحلل Rebel AI كلامك ويرد بصوت قبل الجولة التالية."}</Text>
   </View></ScreenContainer>;
 }
 
-const styles = StyleSheet.create({ page: { flex: 1, alignItems: "center", paddingTop: 22, gap: 10 }, eyebrow: { color: "#73737D", fontWeight: "800", letterSpacing: 1.4, fontSize: 10 }, timer: { color: "#1F1F23", fontSize: 35, fontWeight: "800", fontVariant: ["tabular-nums"] }, status: { color: "#74747C", fontSize: 14, fontWeight: "700" }, temporaryNote: { color: "#986517", fontSize: 10, fontWeight: "800", backgroundColor: "#FFF6E4", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 }, orb: { width: 166, height: 166, borderRadius: 83, justifyContent: "center", alignItems: "center", marginVertical: 8, backgroundColor: "#EAF1FF", borderWidth: 8, borderColor: "#D7E6FF" }, orbListening: { backgroundColor: "#E6F7F3", borderColor: "#C5EBDD" }, orbSpeaking: { backgroundColor: "#EEF4FF", borderColor: "#CFE0FF" }, orbInner: { width: 106, height: 106, borderRadius: 53, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#DFE7F5" }, identity: { alignItems: "center", gap: 3, marginBottom: 4 }, identityName: { color: "#26262C", fontSize: 19, fontWeight: "800" }, identityDetail: { color: "#777780", fontSize: 12 }, transcriptCard: { width: "100%", backgroundColor: "#FFFFFF", borderColor: "#E5E5EA", borderWidth: 1, borderRadius: 15, padding: 12, gap: 4 }, answerCard: { width: "100%", backgroundColor: "#F4F7FF", borderColor: "#DCE7FF", borderWidth: 1, borderRadius: 15, padding: 12, gap: 4 }, cardLabel: { color: "#2563EB", fontSize: 10, fontWeight: "800", textAlign: "right" }, transcript: { color: "#4B4B55", fontSize: 13, lineHeight: 19, textAlign: "right" }, answer: { color: "#2D3444", fontSize: 13, lineHeight: 19, textAlign: "right" }, controls: { marginTop: "auto", flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 20, paddingTop: 15 }, primaryControl: { width: 78, height: 78, borderRadius: 39, backgroundColor: "#2563EB", alignItems: "center", justifyContent: "center", borderWidth: 5, borderColor: "#CFE0FF" }, recordingControl: { backgroundColor: "#D54861", borderColor: "#FFD7DD" }, secondaryControl: { width: 54, height: 54, borderRadius: 27, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E2E2E7", alignItems: "center", justifyContent: "center" }, mutedControl: { backgroundColor: "#FFF3E2", borderColor: "#F2DBB7" }, endControl: { width: 54, height: 54, borderRadius: 27, backgroundColor: "#FFF3F5", borderWidth: 1, borderColor: "#F1D0D6", alignItems: "center", justifyContent: "center" }, hint: { color: "#81818A", fontSize: 11, lineHeight: 17, textAlign: "center", paddingVertical: 14, maxWidth: 340 }, disabled: { opacity: 0.45 }, pressed: { opacity: 0.75, transform: [{ scale: 0.97 }] } });
+const styles = StyleSheet.create({ page: { flex: 1, alignItems: "center", paddingTop: 22, gap: 10 }, eyebrow: { color: "#73737D", fontWeight: "800", letterSpacing: 1.4, fontSize: 10 }, timer: { color: "#1F1F23", fontSize: 35, fontWeight: "800", fontVariant: ["tabular-nums"] }, status: { color: "#74747C", fontSize: 14, fontWeight: "700" }, temporaryNote: { color: "#986517", fontSize: 10, fontWeight: "800", backgroundColor: "#FFF6E4", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 }, orb: { width: 166, height: 166, borderRadius: 83, justifyContent: "center", alignItems: "center", marginVertical: 8, backgroundColor: "#EAF1FF", borderWidth: 8, borderColor: "#D7E6FF" }, orbListening: { backgroundColor: "#E6F7F3", borderColor: "#C5EBDD" }, orbThinking: { backgroundColor: "#FFF7E7", borderColor: "#F7DDA6" }, orbSpeaking: { backgroundColor: "#EEF4FF", borderColor: "#CFE0FF" }, orbInner: { width: 106, height: 106, borderRadius: 53, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#DFE7F5" }, identity: { alignItems: "center", gap: 3, marginBottom: 4 }, identityName: { color: "#26262C", fontSize: 19, fontWeight: "800" }, identityDetail: { color: "#777780", fontSize: 12, textAlign: "center" }, transcriptCard: { width: "100%", backgroundColor: "#FFFFFF", borderColor: "#E5E5EA", borderWidth: 1, borderRadius: 15, padding: 12, gap: 4 }, answerCard: { width: "100%", backgroundColor: "#F4F7FF", borderColor: "#DCE7FF", borderWidth: 1, borderRadius: 15, padding: 12, gap: 4 }, cardLabel: { color: "#2563EB", fontSize: 10, fontWeight: "800", textAlign: "right" }, transcript: { color: "#4B4B55", fontSize: 13, lineHeight: 19, textAlign: "right" }, answer: { color: "#2D3444", fontSize: 13, lineHeight: 19, textAlign: "right" }, controls: { marginTop: "auto", flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 20, paddingTop: 15 }, primaryControl: { width: 78, height: 78, borderRadius: 39, backgroundColor: "#2563EB", alignItems: "center", justifyContent: "center", borderWidth: 5, borderColor: "#CFE0FF" }, recordingControl: { backgroundColor: "#D54861", borderColor: "#FFD7DD" }, secondaryControl: { width: 54, height: 54, borderRadius: 27, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E2E2E7", alignItems: "center", justifyContent: "center" }, mutedControl: { backgroundColor: "#FFF3E2", borderColor: "#F2DBB7" }, endControl: { width: 54, height: 54, borderRadius: 27, backgroundColor: "#FFF3F5", borderWidth: 1, borderColor: "#F1D0D6", alignItems: "center", justifyContent: "center" }, hint: { color: "#81818A", fontSize: 11, lineHeight: 17, textAlign: "center", paddingVertical: 14, maxWidth: 340 }, disabled: { opacity: 0.45 }, pressed: { opacity: 0.75, transform: [{ scale: 0.97 }] } });
