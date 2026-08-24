@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { useRebelSession } from "@/lib/rebel-session";
+import type { TextLanguageId } from "@/shared/rebel-language";
 
 export type ChatMessage = {
   id: string;
@@ -94,7 +95,9 @@ export const voiceProfiles: VoiceProfile[] = [
 
 export type Preferences = {
   selectedVoiceId: string;
+  selectedNativeVoiceId?: string;
   preferredLanguage: string;
+  textLanguage: TextLanguageId;
   selectedProvider: "gemini" | "groq" | "mistral";
   selectedModel: FreeModelId;
   selectedGptId: RebelGptProfile["id"];
@@ -155,7 +158,9 @@ const starterMessages: ChatMessage[] = [
 
 const defaultPreferences: Preferences = {
   selectedVoiceId: "lina",
+  selectedNativeVoiceId: undefined,
   preferredLanguage: "ar-SA",
+  textLanguage: "ar-fusha",
   selectedProvider: "gemini",
   selectedModel: "gemini-3.6-flash",
   selectedGptId: "rebel-core",
